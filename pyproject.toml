@@ -27,7 +27,7 @@ Issues = "https://github.com/Aitherium/awrtifact/issues"
 awrtifact = "awrtifact.cli:main"
 
 [tool.setuptools]
-packages = ["awrtifact"]
+packages = ["awrtifact", "awrtifact.data.gobbonet"]
 
 # provision-repo seeds these into the user's repo — they must ride the wheel.
 [tool.setuptools.package-data]
