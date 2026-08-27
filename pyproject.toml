@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "awrtifact"
+version = "0.1.0"
+description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+# The core (split/plan/upload/verify/fetch) is stdlib-only. PyYAML is needed
+# only for the spec-shaped commands (serve-spec, backup-catalog); the package
+# imports it lazily and fails with a clear message when absent (the
+# fetch_models.py idiom — the same split, on purpose).
+[project.optional-dependencies]
+spec = ["PyYAML>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/Aitherium/awrtifact"
+Documentation = "https://github.com/Aitherium/awrtifact#readme"
+Repository = "https://github.com/Aitherium/awrtifact.git"
+Issues = "https://github.com/Aitherium/awrtifact/issues"
+
+[project.scripts]
+awrtifact = "awrtifact.cli:main"
+
+[tool.setuptools]
+packages = ["awrtifact"]

@@ -1,0 +1,7 @@
+# awgit hook FRAGMENTS are extensionless sh scripts (vcs-capture, vcs-lease-check).
+# `*.sh` covers chain.sh only, so with core.autocrlf=true a fresh checkout would
+# rewrite the fragments CRLF and break the shebang. Pin LF (same class as the
+# AitherOS monorepo guard).
+*.sh text eol=lf
+awgit/hooks/post-commit.d/* text eol=lf
+awgit/hooks/pre-commit.d/* text eol=lf

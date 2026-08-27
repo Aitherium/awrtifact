@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+.coverage
+htmlcov/
+.DS_Store
+*.log
+
+# Generated demo slice of the LIVE op-log graph. It carries real internal
+# tree names, so it must not be committed into a mirrored package.
+# Regenerate locally with scripts/gen_graph_json.py when rendering the page.
+docs/graph.json
