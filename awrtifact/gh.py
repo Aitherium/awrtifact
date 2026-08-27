@@ -128,5 +128,32 @@ def workflow_exists(repo: str, workflow: str) -> bool:
     return proc.returncode == 0
 
 
+def repo_view(repo: str) -> dict | None:
+    """Repo metadata (provision-repo uses .url). None when it does not exist."""
+    proc = _run(
+        ["repo", "view", repo, "--json", "url", "--jq", ".url"]
+    )
+    if proc.returncode != 0:
+        return None
+    return {"url": proc.stdout.strip()}
+
+
+def repo_create(repo: str, public: bool) -> None:
+    """Create the repo under the authed account/org. The gh CLI keeps the
+    invite/confirm prompts off with --confirm; the visibility flag is the
+    only decision."""
+    proc = _run(
+        [
+            "repo",
+            "create",
+            repo,
+            "--confirm",
+            "--private" if not public else "--public",
+        ]
+    )
+    if proc.returncode != 0:
+        raise GhError(f"gh repo create {repo}: {proc.stderr.strip()}")
+
+
 def print_json(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))

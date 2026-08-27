@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrtifact"
-version = "0.1.0"
+version = "0.1.1"
 description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,3 +28,7 @@ awrtifact = "awrtifact.cli:main"
 
 [tool.setuptools]
 packages = ["awrtifact"]
+
+# provision-repo seeds these into the user's repo — they must ride the wheel.
+[tool.setuptools.package-data]
+awrtifact = ["data/gobbonet/*"]

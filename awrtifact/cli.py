@@ -24,6 +24,7 @@ from . import fetch as fetch_mod
 from . import manifest as manifest_mod
 from . import mirror as mirror_mod
 from . import plan as plan_mod
+from . import provision as provision_mod
 from . import serve_spec as serve_spec_mod
 from . import split as split_mod
 from . import upload as upload_mod
@@ -151,6 +152,25 @@ def _cmd_mirror(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_provision(args: argparse.Namespace) -> int:
+    try:
+        result = provision_mod.provision_repo(
+            args.repo, public=args.public, pages=not args.no_pages
+        )
+    except (ValueError, gh.GhError) as exc:
+        return _die(str(exc))
+    print(f"repo ready: {result['html_url']}")
+    for f in result["seeded"]:
+        print(f"  seeded {f}")
+    if result["pages"]:
+        print(f"gate page: {result['gate_url']}  "
+              f"(share this + the passphrase)")
+    else:
+        print("gate page: OFF — private repos need a paid plan for Pages; "
+              "the repo and backups still work, only the share-by-page half needs it")
+    return 0
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     try:
         spec = spec_mod_load(Path(args.spec))
@@ -231,6 +251,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workflow", default=mirror_mod.DEFAULT_WORKFLOW)
     p.add_argument("--parallel", type=int, default=4)
     p.set_defaults(func=_cmd_mirror)
+
+    p = sub.add_parser(
+        "provision-repo",
+        help="create + seed a backup repo (README, mod, gate page) with Pages",
+    )
+    p.add_argument("--repo", required=True, help="OWNER/NAME — created if missing")
+    p.add_argument(
+        "--public", action="store_true",
+        help="public repo (Pages always works; bytes are encrypted anyway)",
+    )
+    p.add_argument("--no-pages", action="store_true", help="skip the Pages enable")
+    p.set_defaults(func=_cmd_provision)
 
     p = sub.add_parser("backup-catalog", help="dispatch mirror runs for gaps")
     p.add_argument("spec")
