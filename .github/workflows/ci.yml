@@ -37,6 +37,7 @@ jobs:
       # the wider scope. Idempotent: list first, create only when missing; a
       # token without R2 admin fails loudly on the list call.
       - name: Ensure R2 bucket exists
+        shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
