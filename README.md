@@ -34,6 +34,39 @@ awrtifact serve-spec awrtifact.yaml           # write the generated worker
 awrtifact backup-catalog awrtifact.yaml --dry-run
 ```
 
+## The newbie half — one command to a working backup repo
+
+`provision-repo` creates the repo if missing, seeds it with an init README
+plus the GobboNet backup mod and the gate page, enables Pages, and prints
+the shareable URL:
+
+```bash
+awrtifact provision-repo --repo you/backups              # private
+awrtifact provision-repo --repo you/backups --public     # Pages always works
+```
+
+The repo's GitHub Pages **is** the gate: `https://you.github.io/backups/
+backup-gate.html` shows a tokenless manifest preview of any backup release
+and decrypts in the browser for anyone with the passphrase. Private repos
+work for backups immediately (Pages needs a paid plan there — the command
+warns, it never fails). A brand-new repo is the ordinary FIRST backup, and
+GitHub refuses to publish releases in an empty repo — the seeding is what
+makes it real.
+
+## First mirror into a repo that is not aitherkvcache
+
+The mirror lane dispatches a GitHub Actions workflow, and the workflow must
+live in the TARGET repo first. For your own repo (public or private):
+
+1. Copy `mirror-to-release.yml` and `hash-release-object.yml` (from the
+   awrtifact source tree, `.DEPLOYMENT/workers/awrtifact/`) into your repo's
+   `.github/workflows/` and push.
+2. Then `awrtifact mirror <URL|FILE> --repo you/your-repo --release <tag>`
+   works as usual.
+
+Without the workflow the mirror refuses loudly (it never silently does
+nothing) — the refusal names the two files to copy.
+
 ## Why the checks exist
 
 - **2 GiB cap.** GitHub release assets top out at 2 GiB; larger artifacts are
