@@ -30,6 +30,26 @@ jobs:
         run: |
           set -e
           awrtifact --version >/dev/null 2>&1 || python -c "import awrtifact"
+      # R2 bootstrap: the awrtifact worker binds WEIGHTS -> aither-artifacts and
+      # the bucket must EXIST or wrangler deploy fails (measured 2026-08-27).
+      # This repo has no CF secrets of its own, so CLOUDFLARE_* resolve to the
+      # ORG-level ones (inherited, ALL repos) — the org token is the one with
+      # the wider scope. Idempotent: list first, create only when missing; a
+      # token without R2 admin fails loudly on the list call.
+      - name: Ensure R2 bucket exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::no org Cloudflare secrets — skipping R2 bootstrap"
+            exit 0
+          fi
+          if ! curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"             | grep -q '"name":"aither-artifacts"'; then
+            curl -s -X POST               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"               -H "Content-Type: application/json"               -d '{"name":"aither-artifacts"}'               "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"               | grep -q '"success":true' || echo "::warning::R2 bucket create failed (token scope?)"
+          fi
+
       - name: tests
         if: ${{ hashFiles('tests/**', 'test/**') != '' }}
         shell: bash
