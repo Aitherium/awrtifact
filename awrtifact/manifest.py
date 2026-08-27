@@ -5,8 +5,8 @@ worker generator. Every field is load-bearing:
 
     name       served asset base name (the worker stitches behind this name)
     total      exact source size in bytes — the client checks this to detect
-               truncation (the TP010 failure class: a 90 GB download that
-               finishes and then reports a corrupt model)
+               truncation (a 90 GB download that finishes and then reports a
+               corrupt model: the size check is the truncation detector)
     sha256     whole-file digest (streamed at split time)
     part_size  nominal slice size (must stay under GitHub's 2 GiB asset cap)
     parts      [{name, size, sha256}] — size AND digest per slice; the last
