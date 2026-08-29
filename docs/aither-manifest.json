@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1",
+  "name": "awrtifact",
+  "description": "Deliberately chunk artifacts into GitHub release assets — the productized aitherkvcache mirror lane.",
+  "url": "https://aitherium.github.io/awrtifact/",
+  "repository": "https://github.com/Aitherium/awrtifact",
+  "kind": "tool",
+  "status": "public",
+  "adopt": "Stand up a versioned artifact store repo and use it immediately — `awrtifact provision-repo --repo you/store` creates + seeds the repo (Pages gate included), `awrtifact mirror <URL|FILE> --release TAG` stores one artifact, `awrtifact fetch NAME --url U --out F` gets it back byte-verified.",
+  "pairs_with": [
+    "awdk",
+    "awnode",
+    "aitherkvcache",
+    "awgit",
+    "awseal",
+    "awshare",
+    "awrecover"
+  ],
+  "includes": []
+}
