@@ -70,7 +70,11 @@
       }).then(function (r) { return r.json(); });
     })
     .then(function (assets) {
-      var man = assets.filter(function (a) { return a.name.indexOf(".backup.json") > 0; })[0];
+      // The mod names its manifest <tag>.backup.json; the awrtifact CLI
+      // uploads <name>.manifest.json — both are the same chunk contract
+      // (per-part + whole sha256), one with an encryption envelope, one
+      // plaintext. A release that carries either is self-describing.
+      var man = assets.filter(function (a) { return /\.(backup|manifest)\.json$/.test(a.name); })[0];
       if (!man) throw new Error("no backup manifest in this release");
       return fetch(man.browser_download_url).then(function (r) { return r.json(); });
     })
@@ -84,7 +88,18 @@
         row.appendChild(n); row.appendChild(s);
         filesEl.appendChild(row);
       });
-      setStatus("Found " + manifest.files.length + " encrypted file(s) in " + tag + ". Enter the passphrase to decrypt them.");
+      var encrypted = manifest.files.some(function (f) {
+        return f.parts && f.parts[0] && f.parts[0].iv;
+      });
+      if (encrypted) {
+        setStatus("Found " + manifest.files.length + " encrypted file(s) in " + tag +
+                  ". Enter the passphrase to decrypt them.");
+      } else {
+        goBtn.disabled = true;
+        setStatus("Plaintext store release — " + manifest.files.length + " file(s), no "
+                  + "passphrase (the CLI uploads plaintext; the GobboNet mod encrypts). "
+                  + "Download with the CLI: awrtifact fetch <name> --url <release>");
+      }
     })
     .catch(function (e) { setStatus("Cannot read the backup: " + e.message, "bad"); });
 

@@ -5,6 +5,14 @@ part is size-checked against the manifest BEFORE upload (the workflow lane's
 `stat -c%s` guard): uploading a truncated local part would make the release
 look complete while serving corrupt bytes.
 
+The manifest itself is uploaded LAST as ``<name>.manifest.json`` (missing
+only, same resumable rule as the parts) — a release that carries its
+manifest is self-describing: the gate page, `awrtifact fetch` and any
+consumer can read the part list and hashes from the release alone, with no
+spec side-channel. The spec remains the SERVING truth (workers, allowlist);
+the release manifest is the artifact's data truth, and the lane gate
+(AW007) asserts the two agree.
+
 `--parallel N` uploads with a thread pool; `--create` creates the release if
 it does not exist (the seed lanes both did this by hand).
 """
@@ -37,7 +45,9 @@ def upload_manifest(
     parallel: int = 1,
     create: bool = False,
 ) -> dict:
-    """Upload missing parts; returns {"uploaded": [...], "skipped": [...]}."""
+    """Upload missing parts + the manifest asset; returns
+    {"uploaded": [...], "skipped_present": [...], "manifest": "uploaded"|"present",
+    "failed": [...]}."""
     dir = Path(dir)
     if create and not gh.release_exists(repo, release):
         gh.create_release(
@@ -76,8 +86,28 @@ def upload_manifest(
             except Exception as exc:  # noqa: BLE001 — report per part
                 failed.append(f"{manifest['parts'][idx]['name']}: {exc}")
 
+    # The manifest asset — the release's self-description. Missing-only like
+    # the parts, so a re-run after a mid-flight failure just lands it. The
+    # RELEASE asset is named <artifact>.manifest.json, so the file is copied
+    # to that name locally first (gh's `file#name` rename syntax was removed
+    # by gh 2.83 — measured 2026-08-27, the asset landed under the source
+    # basename and had to be deleted); the asset is the same bytes as the
+    # manifest.json split wrote.
+    manifest_asset = f"{manifest['name']}.manifest.json"
+    manifest_asset_local = dir / manifest_asset
+    manifest_asset_local.write_bytes((dir / "manifest.json").read_bytes())
+    manifest_state = "present"
+    present = gh.asset_sizes(repo, release)
+    if present.get(manifest_asset) != manifest_asset_local.stat().st_size:
+        try:
+            gh.upload(repo, release, str(manifest_asset_local))
+            manifest_state = "uploaded"
+        except Exception as exc:  # noqa: BLE001 — same per-asset reporting
+            failed.append(f"{manifest_asset}: {exc}")
+
     return {
         "uploaded": uploaded,
         "skipped_present": [manifest["parts"][i]["name"] for i in planned["present"]],
+        "manifest": manifest_state,
         "failed": failed,
     }

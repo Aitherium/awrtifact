@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrtifact"
-version = "0.1.1"
+version = "0.1.3"
 description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
 readme = "README.md"
 requires-python = ">=3.10"

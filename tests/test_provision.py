@@ -113,13 +113,17 @@ def test_repo_must_be_owner_name() -> None:
 
 def test_seeded_assets_byte_pinned() -> None:
     """The embedded mod/gate are snapshots of public/gobbonet — a change in
-    either must be deliberate. Pin their sha256 here."""
+    either must be deliberate. Pin their sha256 here, hashed over LF-
+    NORMALISED bytes: the embedded copies are tracked files and git's
+    autocrlf rewrites them CRLF on checkout, which would make a byte-exact
+    pin fail on every fresh clone (measured 2026-08-27 — the raw hash
+    drifted while the content was unchanged)."""
     pinned = {
         "gobbonet-backup.js": "0988cca66798dcb83a6abcf71f5b70d77b02080503d1e600c3bf3548de347981",
-        "backup-gate.html": "e82764f1b3825a3844cadead5713868dd58345351050d402e62224b66f79a526",
+        "backup-gate.html": "ea6ed2757f069d1d94ec8e977f50dcbc4bd4699fe67249898a9f20c7e97029b9",
     }
     for name, want in pinned.items():
-        data = (provision.DATA_DIR / name).read_bytes()
+        data = (provision.DATA_DIR / name).read_bytes().replace(b"\r\n", b"\n")
         got = hashlib.sha256(data).hexdigest()
         assert got == want, (
             f"{name} changed (was {want[:12]}…, now {got[:12]}…) — re-copy from "
