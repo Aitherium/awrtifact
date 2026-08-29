@@ -133,7 +133,14 @@ def mirror_url(url: str, name: str | None, release: str, repo: str,
     size = _head_size(url, total)
     if not gh.workflow_exists(repo, workflow):
         raise ValueError(
-            f"workflow {workflow} does not exist in {repo} — re-push it first"
+            f"workflow {workflow} does not exist in {repo} — the mirror "
+            f"workflow must live in the TARGET repo's .github/workflows/ "
+            f"before a dispatch can run it. Copy "
+            f".DEPLOYMENT/workers/awrtifact/{workflow} and "
+            f".DEPLOYMENT/workers/awrtifact/hash-release-object.yml "
+            f"(both, from the awrtifact source tree) into your repo's "
+            f".github/workflows/ and push — or use a repo that already "
+            f"has them (aitherkvcache does)"
         )
     gh.workflow_dispatch(repo, workflow, {
         "hf_url": url,
