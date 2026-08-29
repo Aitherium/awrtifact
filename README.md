@@ -34,24 +34,50 @@ awrtifact serve-spec awrtifact.yaml           # write the generated worker
 awrtifact backup-catalog awrtifact.yaml --dry-run
 ```
 
-## The newbie half — one command to a working backup repo
+## One command to a working artifact store repo
 
 `provision-repo` creates the repo if missing, seeds it with an init README
-plus the GobboNet backup mod and the gate page, enables Pages, and prints
-the shareable URL:
+plus the share gate page, enables Pages, and prints the shareable URL:
 
 ```bash
-awrtifact provision-repo --repo you/backups              # private
-awrtifact provision-repo --repo you/backups --public     # Pages always works
+awrtifact provision-repo --repo you/store                # private
+awrtifact provision-repo --repo you/store --public       # Pages always works
 ```
 
-The repo's GitHub Pages **is** the gate: `https://you.github.io/backups/
-backup-gate.html` shows a tokenless manifest preview of any backup release
-and decrypts in the browser for anyone with the passphrase. Private repos
-work for backups immediately (Pages needs a paid plan there — the command
-warns, it never fails). A brand-new repo is the ordinary FIRST backup, and
-GitHub refuses to publish releases in an empty repo — the seeding is what
-makes it real.
+The store is then ready for every lane — `awrtifact upload`, `awrtifact
+mirror`, the GobboNet backup mod, any aw* client that speaks the chunk
+contract. A brand-new repo is the ordinary FIRST use, and GitHub refuses to
+publish releases in an empty repo — the seeding is what makes it real.
+
+The repo's GitHub Pages can carry a share gate for **passphrase-encrypted**
+backups: `https://you.github.io/store/backup-gate.html` shows a tokenless
+manifest preview of an encrypted backup release and decrypts in the browser
+for anyone with the passphrase. Encryption is a property of the CLIENT that
+writes a backup, not of the store — the CLI's parts are plaintext (verified
+by sha256), the GobboNet backup mod writes AES-GCM ciphertext, and both are
+releases in the same store, fetchable byte-verified by either side. Private
+repos work immediately (Pages needs a paid plan there for the gate half —
+the command warns, it never fails).
+
+**See the gate live** (the GobboNet mod's own Pages deployment):
+[wizzense.github.io/GobboNet/backup-gate.html](https://wizzense.github.io/GobboNet/backup-gate.html)
+— pick any encrypted backup release from the drop-down, enter the
+passphrase, and watch it verify + decrypt in the browser.
+
+## Clients of the contract
+
+The chunk contract (`.partN` slices + per-part and whole sha256, under
+GitHub's 2 GiB asset cap) is the interoperability boundary — anything that
+speaks it can read anything that writes it:
+
+- **the CLI** (`split`/`upload`/`mirror`/`fetch`/`verify`) — programmatic,
+  plaintext, resumable
+- **the workers** (`serve-spec` → artifact.aitherium.com / weights.aitherium.com)
+  — Range-stitched serving of the same releases
+- **the GobboNet backup mod** (`gobbonet-backup.js`) — browser-side,
+  passphrase-encrypted backups into your own store, sharing via the gate page
+
+One store, three clients, one manifest contract.
 
 ## First mirror into a repo that is not aitherkvcache
 
