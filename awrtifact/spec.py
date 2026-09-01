@@ -110,14 +110,18 @@ def validate(spec: dict) -> dict:
             re.compile(regex_src)
         except re.error as exc:
             raise ValueError(f"spec.allowlist.regex does not compile: {exc}") from exc
-    seen: set[str] = set()
+    seen: dict[str, str] = {}  # name -> release (each release is its own namespace)
     for art in spec["artifacts"]:
         name = art.get("name")
         if not isinstance(name, str) or "/" in name or "\\" in name:
             raise ValueError(f"artifact name must be a bare filename: {name!r}")
-        if name in seen:
-            raise ValueError(f"duplicate artifact name: {name}")
-        seen.add(name)
+        rel = artifact_release(spec, art)
+        prev = seen.get(name)
+        if prev is not None and prev == rel:
+            raise ValueError(f"duplicate artifact name {name!r} in release "
+                             f"{rel!r} -- same name+release is ambiguous even "
+                             f"for the prefix route")
+        seen[name] = rel
         total = art.get("total")
         if not isinstance(total, int) or total <= 0:
             raise ValueError(f"artifact {name}: total must be a positive int")
@@ -162,6 +166,25 @@ def upstream_bases(spec: dict) -> list[str]:
         if base not in bases:
             bases.append(base)
     return bases
+
+
+def path_upstreams(spec: dict) -> dict:
+    """release -> base URL, for the /<release>/<file> prefix route.
+
+    Every release is its own namespace: a path like
+    artifact.aitherium.com/microembedder-v1/tokenizer.json resolves ONLY
+    within that release, so same-named files in different releases coexist
+    (the flat route keeps the legacy first-match behaviour).
+    """
+    repo = spec["store"]["repo"]
+    out: dict[str, str] = {}
+    for up in spec.get("upstreams") or []:
+        out[up["release"]] = (
+            f"https://github.com/{repo}/releases/download/{up['release']}/")
+    for art in spec.get("artifacts") or []:
+        rel = artifact_release(spec, art)
+        out[rel] = f"https://github.com/{repo}/releases/download/{rel}/"
+    return out
 
 
 def whole_names(spec: dict) -> list[str]:

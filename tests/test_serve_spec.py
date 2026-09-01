@@ -125,3 +125,35 @@ def test_rendered_js_escapes(tmp_path):
     # Chunked derivation: one whole (small) + one stitched (big, 2 parts).
     assert '"small.gguf"' in js  # WHOLE set member
     assert '"big.gguf.part1"' in js
+
+
+def test_prefix_route_namespaces_duplicate_names(tmp_path):
+    """Same-named files in DIFFERENT releases are legal (the /<release>/ prefix
+    route is their namespace); the same name+release stays an error."""
+    from awrtifact import spec as spec_mod
+
+    base = _spec()
+    dup = {
+        "id": "second-tokenizer",
+        "name": "tokenizer.json",
+        "source_url": "https://example.com/tokenizer.json",
+        "total": 700,
+        "release": "other-v1",
+    }
+    base["artifacts"] = list(base["artifacts"]) + [dup]
+    # Cross-release duplicate parses and serves via its own prefix.
+    spec_mod.validate(base)
+    paths = spec_mod.path_upstreams(base)
+    assert paths["other-v1"].endswith("/releases/download/other-v1/")
+    js, _ = serve_spec.render(base, tmp_path / "awrtifact.yaml")
+    assert "PATH_UPSTREAMS" in js
+    assert "other-v1" in js
+
+    # Same name+release is still ambiguous even for the prefix route:
+    # "small.gguf" already lives in artifact-v1.
+    same = {"id": "dup-small", "name": "small.gguf",
+            "source_url": "https://example.com/small.gguf",
+            "total": 999, "release": "artifact-v1"}
+    base["artifacts"] = list(base["artifacts"]) + [same]
+    with pytest.raises(ValueError, match="same name"):
+        spec_mod.validate(base)

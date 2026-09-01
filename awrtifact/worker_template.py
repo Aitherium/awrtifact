@@ -33,6 +33,7 @@ JS_TEMPLATE = r"""/**
  * this hostname.
  */
 const UPSTREAMS = __UPSTREAMS_JSON__;
+const PATH_UPSTREAMS = __PATH_UPSTREAMS_JSON__;
 const ALLOWED = /__ALLOWED_SRC__/;
 
 // Fleet weights served whole (under the 2 GiB asset cap, no stitching needed).
@@ -123,20 +124,12 @@ async function serveChunked(request, spec, name) {
         if (partStart > end) break;
         const subStart = Math.max(0, start - partStart);
         const subEnd = Math.min(part.size - 1, end - partStart);
-        const upstreamResp = await fetch(spec.upstream + part.name, {
-          headers: { Range: `bytes=${subStart}-${subEnd}` },
-          redirect: 'follow',
-        });
-        if (upstreamResp.status !== 206 && upstreamResp.status !== 200) {
-          throw new Error(`upstream ${part.name} -> ${upstreamResp.status}`);
-        }
-        const reader = upstreamResp.body.getReader();
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await writer.write(value);
-        }
+        await streamUpstream(
+          spec.upstream + part.name,
+          { Range: `bytes=${subStart}-${subEnd}` },
+          writer,
+          part.name,
+        );
         partStart += part.size;
       }
       await writer.close();
@@ -145,6 +138,50 @@ async function serveChunked(request, spec, name) {
     }
   })();
   return new Response(readable, { status, headers });
+}
+
+// Stream one upstream body into the writer, RETRYING an EMPTY body. A
+// Cloudflare→GitHub fetch can return a valid status with ZERO bytes
+// (measured 2026-08-28: 206/0 at a part seam — the client then sees
+// Content-Length promise a full range and receive nothing, which its
+// truncation check reads as corruption; the AW002 seam gate caught it as
+// 'does not stitch'). Streaming-safe: only the FIRST chunk is awaited to
+// decide, so large bodies are never buffered.
+async function streamUpstream(url, headers, writer, what) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const resp = await fetch(url, { headers, redirect: 'follow' });
+    if (resp.status === 429 || resp.status >= 500) {
+      // TRANSIENT upstream state (GitHub rate-limits the shared egress IP —
+      // measured 2026-08-28: a burst of fresh-fetch probes tripped it, and
+      // throwing here killed the stream into a 206/0 to the client). Retry,
+      // never fail the stream on a 429/5xx.
+      continue;
+    }
+    if (resp.status !== 206 && resp.status !== 200) {
+      throw new Error(`upstream ${what} -> ${resp.status}`);
+    }
+    const reader = resp.body.getReader();
+    const first = await reader.read();
+    if (!first.value) {
+      // 0-length FIRST chunk — cold upstream connections (Cloudflare -> GitHub
+      // on the 90MB part) can deliver valid 206/200 headers with an empty body,
+      // and the first chunk is NOT always final (measured 2026-09-01: ~30-40%
+      // of cold first fetches). Cancel the reader so the connection drains,
+      // back off, and retry the fetch.
+      await reader.cancel();
+      await new Promise((r) => setTimeout(r, 250));
+      continue;
+    }
+    await writer.write(first.value);
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await writer.write(value);
+    }
+    return;
+  }
+  throw new Error(`upstream ${what} failed after 5 attempts`);
 }
 
 /**
@@ -224,7 +261,16 @@ export default {
     // Take only the FILENAME, so both surfaces work with one worker:
     //   artifacts.aitherium.com/<name>   (custom route, preferred)
     //   <worker>.<account>.workers.dev/<name> (fallback)
-    const name = new URL(request.url).pathname.split('/').filter(Boolean).pop() || '';
+    // Prefix route: /<release>/<file> resolves ONLY within that release — each
+    // release is its own namespace, so same-named files in different releases
+    // (e.g. two tokenizer.json) coexist; the flat route keeps the legacy
+    // first-match behaviour.
+    const segs = new URL(request.url).pathname.split('/').filter(Boolean);
+    let baseOverride = null;
+    if (segs.length >= 2 && PATH_UPSTREAMS[segs[0]]) {
+      baseOverride = PATH_UPSTREAMS[segs[0]];
+    }
+    const name = segs.pop() || '';
     if (!ALLOWED.test(name) && !CHUNKED[name] && !WHOLE.has(name)) {
       return new Response('not a known artifact\n', { status: 404, headers: cors });
     }
@@ -237,13 +283,46 @@ export default {
     if (CHUNKED[name]) return serveChunked(request, CHUNKED[name], name);
     // Try each upstream until one has the file. A GitHub release 404s fast for a
     // missing asset, so the fallback cost is one small miss per unknown name.
-    for (const base of UPSTREAMS) {
-      const upstream = await fetch(base + name, {
-        method: request.method === 'HEAD' ? 'HEAD' : 'GET',
-        headers: request.headers.has('Range') ? { Range: request.headers.get('Range') } : {},
-        redirect: 'follow',
-      });
-      if (upstream.status !== 404 && upstream.status !== 410) {
+    // A prefixed path has exactly ONE candidate (its own release).
+    const candidates = baseOverride ? [baseOverride] : UPSTREAMS;
+    for (const base of candidates) {
+      if (request.method === 'HEAD') {
+        const upstream = await fetch(base + name, { method: 'HEAD', redirect: 'follow' });
+        if (upstream.status === 404 || upstream.status === 410) continue;
+        const headers = new Headers(upstream.headers);
+        for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+        headers.set('Content-Type', contentTypeFor(name));
+        return new Response(null, { status: upstream.status, headers });
+      }
+      // GET with retry on an EMPTY body (the 206/0 class, measured 2026-08-28).
+      // Streaming-safe: only the first chunk is awaited to decide.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const upstream = await fetch(base + name, {
+          method: 'GET',
+          headers: request.headers.has('Range') ? { Range: request.headers.get('Range') } : {},
+          redirect: 'follow',
+        });
+        if (upstream.status === 404 || upstream.status === 410) break; // next upstream
+        if (upstream.status === 429 || upstream.status >= 500) {
+          // transient (rate limit) — retry, never serve the error as bytes
+          continue;
+        }
+        const reader = upstream.body.getReader();
+        const first = await reader.read();
+        if (first.done && !first.value) continue; // empty — retry
+        const body = new ReadableStream({
+          async start(controller) {
+            if (first.value) controller.enqueue(first.value);
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              controller.enqueue(value);
+            }
+            controller.close();
+          },
+        });
         const headers = new Headers(upstream.headers);
         for (const [k, v] of Object.entries(cors)) headers.set(k, v);
         headers.set('Cache-Control', 'public, max-age=31536000, immutable');
@@ -251,7 +330,7 @@ export default {
         // `import()` refuses that MIME (measured 2026-08-26). The upstream
         // headers are copied for Content-Length/Range, but the TYPE is always ours.
         headers.set('Content-Type', contentTypeFor(name));
-        return new Response(upstream.body, { status: upstream.status, headers });
+        return new Response(body, { status: upstream.status, headers });
       }
     }
     const headers = new Headers(cors);

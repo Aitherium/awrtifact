@@ -40,6 +40,7 @@ def render(spec: dict, spec_path: Path, worker: dict | None = None) -> tuple[str
         worker_template.JS_TEMPLATE
         .replace("__GENERATED_HEADER__", header)
         .replace("__UPSTREAMS_JSON__", json.dumps(spec_mod.upstream_bases(spec), indent=2))
+        .replace("__PATH_UPSTREAMS_JSON__", json.dumps(spec_mod.path_upstreams(spec), indent=2))
         .replace("__ALLOWED_SRC__", spec.get("allowlist", {}).get("regex", ""))
         .replace("__WHOLE_JSON__", json.dumps(spec_mod.whole_names(spec)))
         .replace("__CHUNKED_JSON__", json.dumps(chunked, indent=2))
