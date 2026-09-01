@@ -161,15 +161,29 @@ async function streamUpstream(url, headers, writer, what) {
       throw new Error(`upstream ${what} -> ${resp.status}`);
     }
     const reader = resp.body.getReader();
-    const first = await reader.read();
+    let first;
+    try {
+      first = await reader.read();
+    } catch (_e) {
+      // The connection died between the response headers and the first body
+      // chunk — measured 2026-09-01 at ~40% of cold Cloudflare->GitHub
+      // fetches of the 90MB part, and the deployed empty-chunk retry did NOT
+      // move the client-visible rate (3/10 pre -> 4/10 post): the read
+      // THROWS here, it does not return empty, so no retry loop ever saw it.
+      // Uncaught, it aborts the writer AFTER the 206 status was sent — the
+      // client-visible 206/0. Same treatment as an empty body: back off and
+      // retry the fetch.
+      await new Promise((r) => setTimeout(r, 500));
+      continue;
+    }
     if (!first.value) {
-      // 0-length FIRST chunk — cold upstream connections (Cloudflare -> GitHub
-      // on the 90MB part) can deliver valid 206/200 headers with an empty body,
-      // and the first chunk is NOT always final (measured 2026-09-01: ~30-40%
-      // of cold first fetches). Cancel the reader so the connection drains,
-      // back off, and retry the fetch.
+      // 0-length FIRST chunk — cold upstream connections (Cloudflare -> GitHub)
+      // can deliver valid 206/200 headers with an empty body, and the first
+      // chunk is NOT always final (measured 2026-09-01: ~30-40% of cold first
+      // fetches). Cancel the reader so the connection drains, back off, and
+      // retry the fetch.
       await reader.cancel();
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 500));
       continue;
     }
     await writer.write(first.value);
@@ -309,8 +323,19 @@ export default {
           continue;
         }
         const reader = upstream.body.getReader();
-        const first = await reader.read();
-        if (first.done && !first.value) continue; // empty — retry
+        let first;
+        try {
+          first = await reader.read();
+        } catch (_e) {
+          // The connection died between headers and the first chunk — the
+          // same class as streamUpstream (measured 2026-09-01 at ~40% of cold
+          // Cloudflare->GitHub fetches); a throw here is NOT the empty-body
+          // check below, and uncaught it aborts the response after the status
+          // was sent. Back off and retry the fetch.
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        if (!first.value) continue; // empty first chunk (0-length or done) — retry
         const body = new ReadableStream({
           async start(controller) {
             if (first.value) controller.enqueue(first.value);
