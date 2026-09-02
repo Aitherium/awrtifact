@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -125,6 +126,11 @@ def fetch(
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # `url` may be the store BASE (ends with "/") or the asset's full URL. The README
+    # has always shown the base form; until 0.1.4 the base was fetched VERBATIM, which
+    # answered the worker's 404 for the root (measured 2026-09-02 in a fleet container).
+    if url.endswith("/"):
+        url = url + urllib.parse.quote(name)
     dest = dest_dir / name
     lock_path = Path(lockfile) if lockfile else dest_dir / "awrtifact.lock.json"
     lock = _load_lock(lock_path)
