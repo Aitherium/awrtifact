@@ -6,7 +6,7 @@
   "repository": "https://github.com/Aitherium/awrtifact",
   "kind": "tool",
   "status": "public",
-  "adopt": "Stand up a versioned artifact store repo and use it immediately — `awrtifact provision-repo --repo you/store` creates + seeds the repo (Pages gate included), `awrtifact mirror <URL|FILE> --release TAG` stores one artifact, `awrtifact fetch NAME --url U --out F` gets it back byte-verified.",
+  "adopt": "Store one artifact as a versioned GitHub release and fetch it back byte-verified — `awrtifact mirror <URL|FILE> --release TAG`.",
   "pairs_with": [
     "awdk",
     "awnode",
@@ -16,5 +16,15 @@
     "awshare",
     "awrecover"
   ],
-  "includes": []
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 29,
+      "as_of": "2026-09-02T16:28:20-07:00"
+    },
+    "tests": {
+      "value": 6,
+      "as_of": "2026-09-02T16:28:20-07:00"
+    }
+  }
 }
