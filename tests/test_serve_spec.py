@@ -157,3 +157,16 @@ def test_prefix_route_namespaces_duplicate_names(tmp_path):
     base["artifacts"] = list(base["artifacts"]) + [same]
     with pytest.raises(ValueError, match="same name"):
         spec_mod.validate(base)
+
+
+def test_prefix_route_is_a_namespace_for_chunked_and_r2():
+    """2026-09-03: /microembedder-v2/config.json served microembedder-v1's 650-byte config
+    because R2 and CHUNKED were consulted by bare name BEFORE the release prefix. The
+    generated worker must skip R2 for prefixed paths and answer a chunked entry only
+    when its upstream IS the requested release."""
+    from awrtifact import worker_template
+
+    src = worker_template.__file__
+    text = open(src, encoding="utf-8").read()
+    assert "const fromR2 = baseOverride ? null : await serveFromR2(request, env, name);" in text
+    assert "CHUNKED[name].upstream === baseOverride" in text

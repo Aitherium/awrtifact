@@ -291,10 +291,18 @@ export default {
     // R2 before everything, INCLUDING the chunked path: an object uploaded whole
     // to R2 makes its `.partN` manifest irrelevant, and checking after would keep
     // serving the stitched copy of a file that no longer needs stitching.
-    const fromR2 = await serveFromR2(request, env, name);
+    // A PREFIXED request names one release, so a same-named object from another
+    // release must not answer it. Measured 2026-09-03: /microembedder-v2/config.json
+    // served microembedder-v1's 650-byte config (and its 22,972,370-byte ONNX) because
+    // R2 and the chunked map are keyed by bare name and were consulted BEFORE the
+    // prefix. R2 is skipped for prefixed paths (its keys carry no release); chunked
+    // entries answer only when their upstream IS the requested release.
+    const fromR2 = baseOverride ? null : await serveFromR2(request, env, name);
     if (fromR2) return fromR2;
     // Virtual chunked asset (>2 GiB source, split at upload).
-    if (CHUNKED[name]) return serveChunked(request, CHUNKED[name], name);
+    if (CHUNKED[name] && (!baseOverride || CHUNKED[name].upstream === baseOverride)) {
+      return serveChunked(request, CHUNKED[name], name);
+    }
     // Try each upstream until one has the file. A GitHub release 404s fast for a
     // missing asset, so the fallback cost is one small miss per unknown name.
     // A prefixed path has exactly ONE candidate (its own release).
