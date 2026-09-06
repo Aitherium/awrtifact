@@ -1,0 +1,77 @@
+# hash-release-object — cloud-side whole-file sha256 of a chunked release
+# asset (awrtifact lane; port of the bonsai-weights original).
+#
+# SOURCE OF TRUTH lives HERE; the deployed copy is pushed into the store's
+# repo via `gh api -X PUT` (same idiom as mirror-to-release.yml).
+#
+# WHY CLOUD-SIDE: registering a whole-file digest (e.g. a Strata FROZEN
+# reference) needs the artifact's sha256. For cloud-to-cloud mirrored objects
+# nobody ever held the whole file (parts Range-fetched source→release).
+# Hashing from home would pull tens of GB up a slow uplink; the runner has
+# the bytes in its own datacenter.
+#
+# The part ORDER is the correctness question: part10 sorts before part2
+# lexically, so the asset list is sorted NUMERICALLY by part index.
+name: Hash release object
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Served asset base name (parts are <name>.partN)"
+        required: true
+      release:
+        description: "Release tag the parts live in"
+        required: true
+      expect_bytes:
+        description: "Expected total in bytes; fail loud on mismatch"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stream-concatenate parts through the hasher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.name }}
+          RELEASE: ${{ inputs.release }}
+          EXPECT: ${{ inputs.expect_bytes }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          BASE="https://github.com/$REPO/releases/download/$RELEASE/"
+
+          parts=$(gh release view "$RELEASE" --repo "$REPO" --json assets \
+            --jq ".assets[].name | select(startswith(\"$NAME.part\"))" \
+            | sed "s/^$NAME\.part//" | sort -n | sed "s|^|$NAME.part|")
+          if [ -z "$parts" ]; then
+            echo "::error::no .partN assets for $NAME in $RELEASE"; exit 1
+          fi
+
+          cat > /tmp/hash_stream.py <<'PY'
+          import hashlib, sys
+          expect = int(sys.argv[1])
+          sha = hashlib.sha256()
+          blob = hashlib.sha1()
+          blob.update(b"blob %d\0" % expect)  # git blob header, size-verified
+          size = 0
+          while True:
+              chunk = sys.stdin.buffer.read(8 * 1024 * 1024)
+              if not chunk:
+                  break
+              sha.update(chunk); blob.update(chunk); size += len(chunk)
+          if size != expect:
+              print(f"SIZE MISMATCH: stream={size} expect={expect}", file=sys.stderr)
+              sys.exit(1)
+          print(f"sha256={sha.hexdigest()}")
+          print(f"blob_sha={blob.hexdigest()}")
+          print(f"size_bytes={size}")
+          PY
+
+          for p in $parts; do
+            curl -sL --fail -H "User-Agent: aither-hash-lane" "$BASE$p" || exit 1
+          done | python3 /tmp/hash_stream.py "$EXPECT" | tee -a "$GITHUB_STEP_SUMMARY"

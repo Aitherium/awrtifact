@@ -31,4 +31,6 @@ packages = ["awrtifact", "awrtifact.data.gobbonet"]
 
 # provision-repo seeds these into the user's repo — they must ride the wheel.
 [tool.setuptools.package-data]
-awrtifact = ["data/gobbonet/*"]
+# install-workflows seeds these into the caller's own repo -- they must ride
+# the wheel, or the documented mirror-lane setup names files nobody has.
+awrtifact = ["data/gobbonet/*", "data/workflows/*"]

@@ -188,6 +188,35 @@ def _cmd_backup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_install_workflows(args) -> int:
+    """Write the two mirror-lane workflows into a repo the caller controls.
+
+    The README used to say to copy these from the awrtifact source tree at a
+    path that exists only in the monorepo -- so the documented way to set up
+    the mirror lane could not be followed by anyone who installed this package.
+    They ride the wheel now, and this writes them.
+    """
+    from importlib import resources
+
+    dest = Path(args.dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    src = resources.files("awrtifact") / "data" / "workflows"
+    written = []
+    for name in ("mirror-to-release.yml", "hash-release-object.yml"):
+        target = dest / name
+        if target.exists() and not args.force:
+            print(f"  skip {target} (exists; --force to overwrite)")
+            continue
+        target.write_text((src / name).read_text(encoding="utf-8"), encoding="utf-8")
+        written.append(str(target))
+        print(f"  wrote {target}")
+    if not written:
+        print("nothing written: both workflows were already present")
+        return 0
+    print("commit and push them, then `awrtifact mirror <URL|FILE> --repo "
+          "<you>/<repo> --release <tag>` works against your own repo.")
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="awrtifact",
@@ -232,6 +261,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lock")
     p.add_argument("--verify-only", action="store_true")
     p.set_defaults(func=_cmd_fetch)
+
+    p = sub.add_parser(
+        "install-workflows",
+        help="write the mirror-lane GitHub workflows into a repo you control",
+    )
+    p.add_argument("--dir", default=".github/workflows",
+                   help="where to write them (default: .github/workflows)")
+    p.add_argument("--force", action="store_true", help="overwrite existing files")
+    p.set_defaults(func=_cmd_install_workflows)
 
     p = sub.add_parser("serve-spec", help="generate the worker from the spec")
     p.add_argument("spec")
