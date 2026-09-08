@@ -14,17 +14,18 @@
     "awgit",
     "awseal",
     "awshare",
-    "awrecover"
+    "awrecover",
+    "awstorage"
   ],
   "includes": [],
   "metrics": {
     "files": {
-      "value": 34,
-      "as_of": "2026-09-06T20:00:41-07:00"
+      "value": 51,
+      "as_of": "2026-09-08T07:32:44-07:00"
     },
     "tests": {
-      "value": 6,
-      "as_of": "2026-09-06T20:00:41-07:00"
+      "value": 13,
+      "as_of": "2026-09-08T07:32:44-07:00"
     }
   }
 }
