@@ -129,6 +129,12 @@ def fetch(
     # `url` may be the store BASE (ends with "/") or the asset's full URL. The README
     # has always shown the base form; until 0.1.4 the base was fetched VERBATIM, which
     # answered the worker's 404 for the root (measured 2026-09-02 in a fleet container).
+    #
+    # RESTORED 2026-09-09. 72f1b4954e fixed this on 09-02 and d865d2461a -- "reconcile:
+    # merge origin/develop into the fleet lineage (local-wins)" -- put the defect back
+    # two days later. The 09-02 tests stayed, so awrtifact has been red on its own
+    # regression ever since, which is why 0.2.0 could not publish: publish-bricks-paced
+    # selects it every 6 hours and dies on this one test.
     if url.endswith("/"):
         url = url + urllib.parse.quote(name)
     dest = dest_dir / name

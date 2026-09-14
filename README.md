@@ -74,6 +74,30 @@ the command warns, it never fails).
 — pick any encrypted backup release from the drop-down, enter the
 passphrase, and watch it verify + decrypt in the browser.
 
+## Mirror a whole Hugging Face repo into ANY GitHub repo (0.2)
+
+```bash
+awrtifact mirror hf://org/name --repo OWNER/REPO              # cloud lane: runners fetch Hub -> release
+awrtifact mirror hf://datasets/org/name@rev/sub --repo OWNER/REPO --lane local   # stream through this box
+awrtifact mirror org/name --repo OWNER/REPO --lane plan       # enumerate only, touch nothing
+awrtifact mirror hf://org/name --repo OWNER/REPO --seal-key ~/.awseal/key.pem   # sign the set (awseal)
+awrtifact fetch-set --repo OWNER/REPO --release hf-org--name-<sha7> --dest ./name --expect-key <hex>
+```
+
+Every file of the repo is enumerated at a PINNED commit and written into one
+`<set>.mirrorset.json` in the release: original path, flattened asset name,
+size, the Hub's LFS sha256 where it has one, and `.partN` slices for anything
+over the 2 GiB cap. The cloud lane seeds `mirror-hf-set.yml` into the target
+on first use, so any repo you can write to is a mirror target; its verify job
+fails unless every asset is present at the manifest size. `fetch-set` restores
+the original layout and verifies against the ORIGIN digest; files with no
+known digest are reported `unverified`, never silently passed. A `--seal-key`
+signs the manifest with awseal and `fetch-set --expect-key` refuses a set that
+is not signed by that key.
+
+Set `AWRTIFACT_GH_BACKEND=api` + `GH_TOKEN` where there is no `gh` binary
+(containers); the same commands run over the REST API.
+
 ## Clients of the contract
 
 The chunk contract (`.partN` slices + per-part and whole sha256, under
@@ -94,14 +118,9 @@ One store, three clients, one manifest contract.
 The mirror lane dispatches a GitHub Actions workflow, and the workflow must
 live in the TARGET repo first. For your own repo (public or private):
 
-1. Write the two workflows into your repo and push them:
-
-   ```bash
-   awrtifact install-workflows          # --dir defaults to .github/workflows
-   git add .github/workflows && git commit -m 'add awrtifact mirror lane' && git push
-   ```
-
-   They ride the wheel, so this works from a plain `pip install awrtifact`.
+1. Copy `mirror-to-release.yml` and `hash-release-object.yml` (from the
+   awrtifact source tree, `.DEPLOYMENT/workers/awrtifact/`) into your repo's
+   `.github/workflows/` and push.
 2. Then `awrtifact mirror <URL|FILE> --repo you/your-repo --release <tag>`
    works as usual.
 

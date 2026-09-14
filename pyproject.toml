@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrtifact"
-version = "0.1.4"
+version = "0.2.2"
 description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ license = { text = "Apache-2.0" }
 # fetch_models.py idiom — the same split, on purpose).
 [project.optional-dependencies]
 spec = ["PyYAML>=6.0"]
+seal = ["awseal>=0.1"]
 
 [project.urls]
 Homepage = "https://github.com/Aitherium/awrtifact"
@@ -27,10 +28,8 @@ Issues = "https://github.com/Aitherium/awrtifact/issues"
 awrtifact = "awrtifact.cli:main"
 
 [tool.setuptools]
-packages = ["awrtifact", "awrtifact.data.gobbonet"]
+packages = ["awrtifact", "awrtifact.data.gobbonet", "awrtifact.data.workflows"]
 
 # provision-repo seeds these into the user's repo — they must ride the wheel.
 [tool.setuptools.package-data]
-# install-workflows seeds these into the caller's own repo -- they must ride
-# the wheel, or the documented mirror-lane setup names files nobody has.
-awrtifact = ["data/gobbonet/*", "data/workflows/*"]
+awrtifact = ["data/gobbonet/*", "data/workflows/*.yml"]

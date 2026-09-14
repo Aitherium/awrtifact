@@ -26,7 +26,6 @@ mod uploads are AES-GCM ciphertext either way.
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 from . import gh
@@ -39,6 +38,18 @@ SEED_FILES = (
     ("README.md", "README.md"),
     ("gobbonet-backup.js", "gobbonet-backup.js"),
     ("backup-gate.html", "backup-gate.html"),
+)
+
+# The mirror workflows ride the wheel (awrtifact.data.workflows) and are seeded
+# into every provisioned repo, which is what makes "mirror anything from
+# Hugging Face to ANY GitHub repo" true: the target needs the cloud lane's
+# workflow, and a dispatch to a repo without it is a SILENCE (gh warns, exit 0).
+WORKFLOW_DIR = Path(__file__).parent / "data" / "workflows"
+SEED_WORKFLOWS = (
+    "mirror-hf-set.yml",
+    "mirror-hf-to-release.yml",
+    "mirror-to-release.yml",
+    "hash-release-object.yml",
 )
 
 README_TEMPLATE = """# {repo} — encrypted model backups
@@ -61,27 +72,14 @@ The passphrase is never stored anywhere. Lose it, lose the backup.
 """
 
 
-def _put_file(repo: str, path: str, content: str) -> None:
-    """PUT one file into the repo. A 422 (content already exists) is
-    idempotent — the file is already there."""
-    proc = gh._run(
-        [
-            "api",
-            "-X",
-            "PUT",
-            f"repos/{repo}/contents/{path}",
-            "-f",
-            f"message=awrtifact provision: {path}",
-            "-f",
-            f"content={base64.b64encode(content.encode()).decode()}",
-        ]
-    )
-    if proc.returncode != 0 and "422" not in proc.stderr:
-        raise gh.GhError(f"seeding {path}: {proc.stderr.strip()}")
+def _put_file(repo: str, path: str, content: str) -> str:
+    """Seed one file; "created" or "present" (an existing file is left alone)."""
+    return gh.put_file(repo, path, content, message=f"awrtifact provision: {path}")
+
 
 
 def provision_repo(
-    repo: str, public: bool = False, pages: bool = True
+    repo: str, public: bool = False, pages: bool = True, workflows: bool = True
 ) -> dict:
     """Create (if missing) and seed a backup repo; return the URLs.
 
@@ -111,26 +109,18 @@ def provision_repo(
             content = (DATA_DIR / local).read_text(encoding="utf-8")
         _put_file(repo, path, content)
         seeded.append(path)
+    if workflows:
+        for wf in SEED_WORKFLOWS:
+            wf_path = f".github/workflows/{wf}"
+            _put_file(repo, wf_path, (WORKFLOW_DIR / wf).read_text(encoding="utf-8"))
+            seeded.append(wf_path)
 
     pages_ok = True
     if pages:
-        proc = gh._run(
-            [
-                "api",
-                "-X",
-                "POST",
-                f"repos/{repo}/pages",
-                "-f",
-                "source[branch]=main",
-                "-f",
-                "source[path]=/",
-            ]
-        )
-        if proc.returncode != 0:
-            # Private repos need a paid plan for Pages; public repos always
-            # work. Refusal is a warning, not a failure — the repo and the
-            # backups still work; only the share-by-gate-page half needs it.
-            pages_ok = False
+        # Private repos need a paid plan for Pages; public repos always
+        # work. Refusal is a warning, not a failure -- the repo and the
+        # backups still work; only the share-by-gate-page half needs it.
+        pages_ok = gh.enable_pages(repo)
 
     return {
         "repo": repo,

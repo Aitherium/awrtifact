@@ -74,7 +74,16 @@ def test_creates_private_when_missing(_fake_gh: _FakeGh) -> None:
 def test_reuses_existing_repo(_fake_gh: _FakeGh) -> None:
     _fake_gh.created = True
     result = provision.provision_repo("you/backups")
-    assert result["seeded"] == ["README.md", "gobbonet-backup.js", "backup-gate.html"]
+    assert result["seeded"][:3] == ["README.md", "gobbonet-backup.js", "backup-gate.html"]
+    # The mirror workflows ride along: seeding them is what makes ANY repo a
+    # mirror target, and the seeded text is the package's own copy (no drift).
+    assert result["seeded"][3:] == [
+        f".github/workflows/{wf}" for wf in provision.SEED_WORKFLOWS]
+    seeded = dict(_fake_gh.seeded)
+    for wf in provision.SEED_WORKFLOWS:
+        assert seeded[f".github/workflows/{wf}"] == (
+            provision.WORKFLOW_DIR / wf).read_text(encoding="utf-8")
+    assert "GITHUB_REPOSITORY" in seeded[".github/workflows/mirror-hf-set.yml"]
     assert result["html_url"] == "https://github.com/you/backups"
 
 

@@ -1,9 +1,13 @@
 """awrtifact fetch: base-URL and full-URL forms both land the named asset; a 404 is a
 refusal with a non-zero exit, never a silent success.
 
-Measured 2026-09-02 from inside a fleet container: `awrtifact fetch NAME --url
-https://artifact.aitherium.com/` (the README's documented form) fetched the BASE
-verbatim, got the worker's 404 for the root, and the caller saw an empty output dir.
+Measured 2026-09-02 from inside a fleet container: `awrtifact fetch NAME --url https://<store>/`
+(the README's documented form) fetched the BASE verbatim, got the worker's 404 for
+the root, and the caller saw an empty output dir.
+
+The asset here is a neutral placeholder on purpose: this file SHIPS in the sdist,
+and the moat rule (AWRF005) is that a published package must not advertise which
+models we serve. The behaviour under test is the URL join, not the name.
 """
 from __future__ import annotations
 
@@ -30,7 +34,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def _serve(self, head_only: bool) -> None:
-        if self.path != "/aither-code-embed.config.json":
+        if self.path != "/example-model.config.json":
             self.send_response(404)
             self.end_headers()
             return
@@ -68,18 +72,18 @@ def server():
 
 
 def test_base_url_form_lands_the_named_asset(server, tmp_path):
-    r = fetch_mod.fetch("aither-code-embed.config.json", server, tmp_path, expected=len(BODY),
+    r = fetch_mod.fetch("example-model.config.json", server, tmp_path, expected=len(BODY),
                         lockfile=tmp_path / "lock.json")
     assert r["status"] == "fetched"
-    assert (tmp_path / "aither-code-embed.config.json").read_bytes() == BODY
+    assert (tmp_path / "example-model.config.json").read_bytes() == BODY
     assert r["sha256"] == hashlib.sha256(BODY).hexdigest()
 
 
 def test_full_url_form_still_works(server, tmp_path):
-    r = fetch_mod.fetch("aither-code-embed.config.json", server + "aither-code-embed.config.json",
+    r = fetch_mod.fetch("example-model.config.json", server + "example-model.config.json",
                         tmp_path, expected=len(BODY), lockfile=tmp_path / "lock.json")
     assert r["status"] == "fetched"
-    assert (tmp_path / "aither-code-embed.config.json").read_bytes() == BODY
+    assert (tmp_path / "example-model.config.json").read_bytes() == BODY
 
 
 def test_missing_asset_is_a_refusal_not_an_empty_dir(server, tmp_path):
