@@ -19,12 +19,12 @@ import os
 import shutil
 import sys
 
-#: Frozen from AitherOS/config/ecosystem.yaml at generation time. A shipped
+#: Frozen from the Aither World registry at generation time. A shipped
 #: package cannot read the registry, and a doctor that guessed at the family
 #: would go stale in silence. Regenerate to update.
 SELF = 'awrtifact'
-FAMILY = ['awask', 'awbac', 'awbrain', 'awbrowse', 'awclassify', 'awdelphi', 'awdit', 'awevolve', 'awfind', 'awfocus', 'awgit', 'awgraph', 'awgym', 'awiam', 'awkno', 'awm', 'awmail', 'awnboard', 'awnest', 'awnet', 'awnode', 'awpool', 'awpredict', 'awprism', 'awreason', 'awrecover', 'awrecurse', 'awrelay', 'awrena', 'awrepl', 'awresearch', 'awrise', 'awrouter', 'awrun', 'awscreen', 'awseal', 'awshare', 'awsprite', 'awswarm', 'awtoll', 'awtunnel', 'awvision', 'awvoice', 'awwall']
-PAIRS_WITH = ['adk', 'awgit', 'awnode', 'awrecover', 'awseal', 'awshare']
+FAMILY = ['awask', 'awavatar', 'awbac', 'awbrain', 'awbrowse', 'awclassify', 'awdecide', 'awdelphi', 'awdit', 'awembed', 'awevolve', 'awfind', 'awflow', 'awfocus', 'awgit', 'awgraph', 'awgym', 'awiam', 'awkno', 'awm', 'awmail', 'awnboard', 'awnest', 'awnet', 'awpool', 'awpredict', 'awprism', 'awprove', 'awreason', 'awrecover', 'awrecurse', 'awrelay', 'awrena', 'awrepl', 'awreport', 'awresearch', 'awrise', 'awrouter', 'awrun', 'awscreen', 'awseal', 'awsettings', 'awshare', 'awsprite', 'awstorage', 'awswarm', 'awtax', 'awtoll', 'awtunnel', 'awvision', 'awvoice', 'awwall', 'gawbbonet']
+PAIRS_WITH = ['adk', 'awgit', 'awrecover', 'awseal', 'awshare', 'awstorage']
 
 #: This brick's OWN config, read out of its source at generation time.
 #: ENV_REQUIRED is `os.environ["X"]` -- absent, that is a KeyError the moment
@@ -33,7 +33,7 @@ PAIRS_WITH = ['adk', 'awgit', 'awnode', 'awrecover', 'awseal', 'awshare']
 #: platform-wide vars it also touches would be noise, and a doctor that floods
 #: gets ignored.
 ENV_REQUIRED = []
-ENV_OPTIONAL = []
+ENV_OPTIONAL = ['AWRTIFACT_GH_BACKEND']
 
 
 def _installed(mod: str) -> "str | None":
