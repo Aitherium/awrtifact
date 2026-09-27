@@ -12,6 +12,8 @@ Sentinel tokens (never valid in generated output):
     __ALLOWED_SRC__        regex source string
     __WHOLE_JSON__         array of whole-file names
     __CHUNKED_JSON__       name → {upstream, parts:[{name,size}]}
+    __SHARE_ROUTE_JS__     the Aither Share byte route, or "" (opt-in per worker)
+    __SHARE_ROUTE_DISPATCH__  its dispatch line in fetch(), or ""
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ const WHOLE = new Set(__WHOLE_JSON__);
 // client asks for by the original filename. Range requests are translated into
 // per-part sub-ranges. The manifest is GENERATED from the awrtifact spec — never
 // hand-edited (a hand-edited entry is exactly how a stale build ships).
-const CHUNKED = __CHUNKED_JSON__;
+const CHUNKED = __CHUNKED_JSON__;__SHARE_ROUTE_JS__
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -271,7 +273,7 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...cors },
       });
-    }
+    }__SHARE_ROUTE_DISPATCH__
     // Take only the FILENAME, so both surfaces work with one worker:
     //   artifacts.aitherium.com/<name>   (custom route, preferred)
     //   <worker>.<account>.workers.dev/<name> (fallback)
@@ -390,3 +392,111 @@ __ROUTE_BLOCK__
 binding = "__R2_BINDING__"
 bucket_name = "__R2_BUCKET__"
 """
+
+
+#: Aither Share byte route: `/s/<share_id>?t=<ticket>`. Rendered ONLY for a worker
+#: whose spec entry sets `share_grant_url`; every other worker renders byte-for-
+#: byte as before, so adding this template never redeploys a worker by itself.
+#:
+#: What it serves is CIPHERTEXT from R2 (`share/<id>/ciphertext.bin`). The worker
+#: never holds a data key. Every request asks Genesis (through the public grant-
+#: check door) whether the ticket still holds, so a revoke is effective on the
+#: next request: the response is `private, no-store`, and nothing is cached at the
+#: edge that could outlive a revocation.
+SHARE_ROUTE_JS = r"""
+
+// ── Aither Share: /s/<share_id>?t=<ticket> ─────────────────────────────────────
+// GENERATED because this worker's spec sets share_grant_url. Grant-checked on
+// EVERY request (never cached), Range-capable, ciphertext only.
+const SHARE_GRANT_URL = __SHARE_GRANT_URL_JSON__;
+const SHARE_ID = /^shr_[A-Za-z0-9_-]{8,64}$/;
+const shareHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Range, X-Share-Ticket',
+  'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, X-Share-Sha256',
+  'Cache-Control': 'private, no-store',
+};
+
+function shareRefusal(status, text) {
+  return new Response(text + '\n', { status, headers: shareHeaders });
+}
+
+async function serveShare(request, env, shareId) {
+  if (!SHARE_ID.test(shareId)) return shareRefusal(404, 'not found');
+  const url = new URL(request.url);
+  // TODO(ticket-in-query): `?t=` lands in edge logs and Referer headers, and the
+  // ticket is reusable for its 5-minute life (it unlocks ciphertext only). Accept
+  // it from the X-Share-Ticket header only, or have the grant check spend it.
+  const ticket = request.headers.get('X-Share-Ticket') || url.searchParams.get('t') || '';
+  if (!ticket) return shareRefusal(401, 'this link needs a ticket');
+  const bucket = env && env.__R2_BINDING__;
+  if (!bucket) return shareRefusal(503, 'share storage is not bound');
+
+  let grant;
+  try {
+    const resp = await fetch(SHARE_GRANT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ share_id: shareId, ticket }),
+    });
+    // 410 = revoked or expired, relayed as-is so the page can say so.
+    if (resp.status === 410) return shareRefusal(410, 'revoked by sender');
+    if (!resp.ok) return shareRefusal(resp.status === 404 ? 404 : 403, 'not allowed');
+    grant = await resp.json();
+  } catch (_e) {
+    // Fail CLOSED: an unreachable grant check never falls through to serving.
+    return shareRefusal(503, 'grant check unavailable');
+  }
+  const prefix = `share/${shareId}/`;
+  if (!grant || grant.ok !== true || typeof grant.object_key !== 'string'
+      || !grant.object_key.startsWith(prefix)) {
+    return shareRefusal(403, 'not allowed');
+  }
+
+  const rangeHeader = request.headers.get('Range');
+  let object;
+  if (rangeHeader) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+    if (!m || (m[1] === '' && m[2] === '')) return shareRefusal(416, 'bad range');
+    let r;
+    if (m[1] === '') r = { suffix: Number(m[2]) };
+    else if (m[2] === '') r = { offset: Number(m[1]) };
+    else {
+      const start = Number(m[1]);
+      const end = Number(m[2]);
+      if (end < start) return shareRefusal(416, 'range not satisfiable');
+      r = { offset: start, length: end - start + 1 };
+    }
+    object = await bucket.get(grant.object_key, { range: r });
+  } else {
+    object = await bucket.get(grant.object_key);
+  }
+  if (!object) return shareRefusal(404, 'not found');
+
+  const headers = new Headers(shareHeaders);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Type', 'application/octet-stream');
+  if (typeof grant.sha256 === 'string') headers.set('X-Share-Sha256', grant.sha256);
+  if (rangeHeader && object.range && typeof object.range.offset === 'number') {
+    const start = object.range.offset;
+    const len = object.range.length ?? (object.size - start);
+    headers.set('Content-Length', String(len));
+    // Whole-object size, never `*`: a client detects truncation against it.
+    headers.set('Content-Range', `bytes ${start}-${start + len - 1}/${object.size}`);
+    if (request.method === 'HEAD') return new Response(null, { status: 206, headers });
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set('Content-Length', String(object.size));
+  if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
+  return new Response(object.body, { status: 200, headers });
+}"""
+
+SHARE_ROUTE_DISPATCH = r"""
+    // Aither Share bytes: grant-checked, never matched by the allowlist below.
+    {
+      const shareSegs = new URL(request.url).pathname.split('/').filter(Boolean);
+      if (shareSegs.length === 2 && shareSegs[0] === 's') {
+        return serveShare(request, env, shareSegs[1]);
+      }
+    }"""
