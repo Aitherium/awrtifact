@@ -39,10 +39,16 @@ Shape:
         release: bonsai-image-v1         # release tag to serve from
         part_size: 1900000000            # optional; default 1.9 GiB
         parts: []                        # optional explicit sizes; else derived
+        part_names: []                   # optional asset names for `parts` (else .partN)
+        repo: Aitherium/awnix            # optional; else store.repo
 
 An artifact whose total exceeds GitHub's 2 GiB cap is CHUNKED (parts derived
 uniformly: N full slices + one tail). An artifact at or under the cap is
 served WHOLE unless explicit `parts` are given.
+
+`repo` lets one store serve releases from another repo (the awnix ISOs live in
+Aitherium/awnix, not the weights repo), and `part_names` serves a file that some
+OTHER tool split -- awnix's ISO lane names its slices `<iso>.00.part`, not `.partN`.
 """
 
 from __future__ import annotations
@@ -133,6 +139,15 @@ def validate(spec: dict) -> dict:
                 )
             if any(p > GITHUB_ASSET_CAP for p in parts):
                 raise ValueError(f"artifact {name}: a part exceeds the 2 GiB cap")
+            pnames = art.get("part_names") or []
+            if pnames and (len(pnames) != len(parts) or len(set(pnames)) != len(pnames)
+                           or any("/" in n or "\\" in n for n in pnames)):
+                raise ValueError(f"artifact {name}: part_names must be {len(parts)} "
+                                 f"distinct bare filenames, one per part")
+        elif art.get("part_names"):
+            raise ValueError(f"artifact {name}: part_names needs explicit parts sizes")
+        if "repo" in art and (not isinstance(art["repo"], str) or art["repo"].count("/") != 1):
+            raise ValueError(f"artifact {name}: repo must be 'owner/repo'")
         else:
             part_size = art.get("part_size") or DEFAULT_PART_SIZE
             if part_size > GITHUB_ASSET_CAP:
@@ -150,6 +165,11 @@ def artifact_release(spec: dict, art: dict) -> str:
     raise ValueError(f"artifact {art.get('name')}: no release and no upstreams")
 
 
+def artifact_repo(spec: dict, art: dict) -> str:
+    """The owner/repo an artifact's release lives in (artifact wins, else the store)."""
+    return art.get("repo") or spec["store"]["repo"]
+
+
 def upstream_bases(spec: dict) -> list[str]:
     """ALLOWED-lane base URLs, tried in order: distinct release downloads."""
     repo = spec["store"]["repo"]
@@ -160,7 +180,7 @@ def upstream_bases(spec: dict) -> list[str]:
             bases.append(base)
     for art in spec.get("artifacts") or []:
         base = (
-            f"https://github.com/{repo}/releases/download/"
+            f"https://github.com/{artifact_repo(spec, art)}/releases/download/"
             f"{artifact_release(spec, art)}/"
         )
         if base not in bases:
@@ -183,7 +203,7 @@ def path_upstreams(spec: dict) -> dict:
             f"https://github.com/{repo}/releases/download/{up['release']}/")
     for art in spec.get("artifacts") or []:
         rel = artifact_release(spec, art)
-        out[rel] = f"https://github.com/{repo}/releases/download/{rel}/"
+        out[rel] = f"https://github.com/{artifact_repo(spec, art)}/releases/download/{rel}/"
     return out
 
 
@@ -200,7 +220,6 @@ def whole_names(spec: dict) -> list[str]:
 
 def chunked_map(spec: dict) -> dict:
     """name → {"upstream": base-url, "parts": [{name, size}]} for big artifacts."""
-    repo = spec["store"]["repo"]
     out: dict[str, dict] = {}
     for art in spec.get("artifacts") or []:
         name = art["name"]
@@ -210,16 +229,15 @@ def chunked_map(spec: dict) -> dict:
             continue
         if explicit:
             # Explicit parts are SIZES (the spec contract); name them .partN.
-            sizes = [
-                {"name": f"{name}.part{idx}", "size": size}
-                for idx, size in enumerate(explicit)
-            ]
+            names = art.get("part_names") or [f"{name}.part{i}" for i in range(len(explicit))]
+            sizes = [{"name": n, "size": size} for n, size in zip(names, explicit)]
         else:
             sizes = derive_parts(name, total, art.get("part_size")
                                  or DEFAULT_PART_SIZE)
         release = artifact_release(spec, art)
         out[name] = {
-            "upstream": f"https://github.com/{repo}/releases/download/{release}/",
+            "upstream": (f"https://github.com/{artifact_repo(spec, art)}"
+                         f"/releases/download/{release}/"),
             "parts": [{"name": p["name"], "size": p["size"]} for p in sizes],
         }
     return out

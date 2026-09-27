@@ -170,3 +170,49 @@ def test_prefix_route_is_a_namespace_for_chunked_and_r2():
     text = open(src, encoding="utf-8").read()
     assert "const fromR2 = baseOverride ? null : await serveFromR2(request, env, name);" in text
     assert "CHUNKED[name].upstream === baseOverride" in text
+
+
+def _cross_repo_spec() -> dict:
+    spec = _spec()
+    spec["artifacts"] = [{
+        "id": "awnix-ai-full-iso",
+        "name": "awnix-ai-full-x86_64.iso",
+        "repo": "Aitherium/awnix",
+        "release": "awnix-iso-ai-full-2026.09.22",
+        "total": 300,
+        "parts": [200, 100],
+        "part_names": ["awnix-x86_64.iso.00.part", "awnix-x86_64.iso.01.part"],
+    }]
+    return spec
+
+
+def test_cross_repo_named_parts_reach_the_chunked_map():
+    from awrtifact import spec as spec_mod
+
+    s = _cross_repo_spec()
+    spec_mod.validate(s)
+    entry = spec_mod.chunked_map(s)["awnix-ai-full-x86_64.iso"]
+    assert entry["upstream"] == (
+        "https://github.com/Aitherium/awnix/releases/download/awnix-iso-ai-full-2026.09.22/")
+    assert [p["name"] for p in entry["parts"]] == [
+        "awnix-x86_64.iso.00.part", "awnix-x86_64.iso.01.part"]
+    assert spec_mod.path_upstreams(s)["awnix-iso-ai-full-2026.09.22"].startswith(
+        "https://github.com/Aitherium/awnix/")
+    # the store repo still owns everything that does not say otherwise
+    assert all("aitherkvcache" in b or "awnix" in b for b in spec_mod.upstream_bases(s))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda a: a.update(part_names=["only-one.part"]),
+    lambda a: a.update(part_names=["x.part", "x.part"]),
+    lambda a: a.update(part_names=["../x", "y"]),
+    lambda a: a.update(repo="not-a-repo"),
+    lambda a: (a.pop("parts"), a.update(total=300)),
+])
+def test_cross_repo_spec_refuses_bad_data(mutate):
+    from awrtifact import spec as spec_mod
+
+    s = _cross_repo_spec()
+    mutate(s["artifacts"][0])
+    with pytest.raises(ValueError):
+        spec_mod.validate(s)
