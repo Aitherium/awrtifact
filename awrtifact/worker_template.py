@@ -14,6 +14,8 @@ Sentinel tokens (never valid in generated output):
     __CHUNKED_JSON__       name → {upstream, parts:[{name,size}]}
     __SHARE_ROUTE_JS__     the Aither Share byte route, or "" (opt-in per worker)
     __SHARE_ROUTE_DISPATCH__  its dispatch line in fetch(), or ""
+    __SHOP_ROUTE_JS__      the /shop/<product>/latest redirect, or "" (opt-in per worker)
+    __SHOP_ROUTE_DISPATCH__   its dispatch line in fetch(), or ""
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ const WHOLE = new Set(__WHOLE_JSON__);
 // client asks for by the original filename. Range requests are translated into
 // per-part sub-ranges. The manifest is GENERATED from the awrtifact spec — never
 // hand-edited (a hand-edited entry is exactly how a stale build ships).
-const CHUNKED = __CHUNKED_JSON__;__SHARE_ROUTE_JS__
+const CHUNKED = __CHUNKED_JSON__;__SHARE_ROUTE_JS____SHOP_ROUTE_JS__
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -273,7 +275,7 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...cors },
       });
-    }__SHARE_ROUTE_DISPATCH__
+    }__SHARE_ROUTE_DISPATCH____SHOP_ROUTE_DISPATCH__
     // Take only the FILENAME, so both surfaces work with one worker:
     //   artifacts.aitherium.com/<name>   (custom route, preferred)
     //   <worker>.<account>.workers.dev/<name> (fallback)
@@ -498,5 +500,37 @@ SHARE_ROUTE_DISPATCH = r"""
       const shareSegs = new URL(request.url).pathname.split('/').filter(Boolean);
       if (shareSegs.length === 2 && shareSegs[0] === 's') {
         return serveShare(request, env, shareSegs[1]);
+      }
+    }"""
+
+
+#: Shop downloads: `/shop/<product>/latest` -> 302 to `/<release>/<file>` on the same
+#: host. Rendered ONLY for a worker whose spec entry sets `shop_route: true`. The
+#: product rows are `spec.shop` (spec.shop_map); the target is an artifact the spec
+#: already serves, so the redirect can never point outside the allowlisted releases.
+#: A short edge cache (5 min) because `latest` moves when a new build is published;
+#: the versioned target itself stays immutable.
+SHOP_ROUTE_JS = r"""
+
+// ── Shop downloads: /shop/<product>/latest ─────────────────────────────────────
+// GENERATED because this worker's spec sets shop_route. The stable URL a shop SKU's
+// download_url names; the bytes are a versioned release asset listed in the spec.
+const SHOP = __SHOP_JSON__;
+
+function serveShop(product) {
+  const target = Object.prototype.hasOwnProperty.call(SHOP, product) ? SHOP[product] : null;
+  if (!target) return new Response('no such product\n', { status: 404, headers: cors });
+  const headers = new Headers(cors);
+  headers.set('Location', target);
+  headers.set('Cache-Control', 'public, max-age=300');
+  return new Response(null, { status: 302, headers });
+}"""
+
+SHOP_ROUTE_DISPATCH = r"""
+    // Shop downloads: a stable per-product URL, redirected to the versioned asset.
+    {
+      const shopSegs = new URL(request.url).pathname.split('/').filter(Boolean);
+      if (shopSegs.length === 3 && shopSegs[0] === 'shop' && shopSegs[2] === 'latest') {
+        return serveShop(shopSegs[1]);
       }
     }"""

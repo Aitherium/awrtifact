@@ -42,6 +42,10 @@ Shape:
         part_names: []                   # optional asset names for `parts` (else .partN)
         repo: Aitherium/awnix            # optional; else store.repo
 
+    shop:                                # optional; /shop/<product>/latest -> 302
+      - product: saga                    # lowercase slug, the URL segment
+        artifact: shop-saga-zip          # an artifacts[].id; its release+name is the target
+
 An artifact whose total exceeds GitHub's 2 GiB cap is CHUNKED (parts derived
 uniformly: N full slices + one tail). An artifact at or under the cap is
 served WHOLE unless explicit `parts` are given.
@@ -152,7 +156,40 @@ def validate(spec: dict) -> dict:
             part_size = art.get("part_size") or DEFAULT_PART_SIZE
             if part_size > GITHUB_ASSET_CAP:
                 raise ValueError(f"artifact {name}: part_size exceeds the 2 GiB cap")
+    shop_map(spec)  # raises on a bad shop row
     return spec
+
+
+_SHOP_PRODUCT = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def shop_map(spec: dict) -> dict:
+    """product -> "/<release>/<name>", for the /shop/<product>/latest redirect.
+
+    The shop's SKU rows (``product_billing.yaml`` ``download_url``) name a STABLE
+    url per product; the bytes behind it are a versioned release asset. Each
+    ``shop:`` row points a product at one ``artifacts[].id``, so moving
+    ``latest`` to a new build is a spec edit (a new artifact row + repoint),
+    never a worker edit -- and the target is always an asset the spec already
+    serves (size-checked by AW001, stray-asset-checked by AW005).
+    """
+    rows = spec.get("shop") or []
+    if not isinstance(rows, list):
+        raise ValueError("spec.shop must be a list")
+    by_id = {a.get("id"): a for a in spec.get("artifacts") or [] if a.get("id")}
+    out: dict[str, str] = {}
+    for row in rows:
+        product = (row or {}).get("product")
+        if not isinstance(product, str) or not _SHOP_PRODUCT.match(product):
+            raise ValueError(f"spec.shop product must be a lowercase slug: {product!r}")
+        if product in out:
+            raise ValueError(f"spec.shop: duplicate product {product!r}")
+        art = by_id.get(row.get("artifact"))
+        if art is None:
+            raise ValueError(f"spec.shop {product}: artifact {row.get('artifact')!r} "
+                             f"is not an artifacts[].id")
+        out[product] = f"/{artifact_release(spec, art)}/{art['name']}"
+    return out
 
 
 def artifact_release(spec: dict, art: dict) -> str:
