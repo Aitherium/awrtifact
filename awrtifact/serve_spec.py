@@ -142,6 +142,8 @@ def emit(spec: dict, spec_path: Path, check: bool = False) -> list[Path]:
         return [t for t, _, _ in rendered]
     for target, js, toml in rendered:
         target.mkdir(parents=True, exist_ok=True)
-        (target / "index.js").write_text(js, encoding="utf-8")
-        (target / "wrangler.toml").write_text(toml, encoding="utf-8")
+        # LF always: a Windows render must not rewrite every line as CRLF churn
+        # (measured 2026-09-30: +4,300/-4,300 lines per worker from one data edit).
+        (target / "index.js").write_text(js, encoding="utf-8", newline="\n")
+        (target / "wrangler.toml").write_text(toml, encoding="utf-8", newline="\n")
     return [t for t, _, _ in rendered]
