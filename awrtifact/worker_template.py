@@ -69,6 +69,14 @@ function contentTypeFor(name) {
   if (/\.(?:esm\.)?(?:js|mjs)$/.test(name)) return 'application/javascript; charset=utf-8';
   if (name.endsWith('.wasm')) return 'application/wasm';
   if (name.endsWith('.json')) return 'application/json';
+  // Media (2026-10-01, the AitherOS showcase film): a <video> or <img> pointed at
+  // the store needs a media type, or a direct link downloads instead of playing.
+  if (name.endsWith('.mp4')) return 'video/mp4';
+  if (name.endsWith('.webm')) return 'video/webm';
+  if (/\.jpe?g$/.test(name)) return 'image/jpeg';
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.vtt')) return 'text/vtt; charset=utf-8';
+  if (name.endsWith('.srt')) return 'text/plain; charset=utf-8';
   return 'application/octet-stream';
 }
 
