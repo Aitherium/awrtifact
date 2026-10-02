@@ -210,6 +210,149 @@ async function streamUpstream(url, headers, writer, what) {
   throw new Error(`upstream ${what} failed after 5 attempts`);
 }
 
+// A single-upstream body is PROMISED (explicit Content-Length) and then pumped
+// with resume, never piped straight through. Measured 2026-10-02 on
+// weights.aitherium.com: 12 of 13 plain GETs of Bonsai-4B-Q1_0.gguf
+// (572,270,624 bytes) ended between 2 MB and 200 MB with HTTP 200,
+// `Transfer-Encoding: chunked` and NO Content-Length — the upstream stream ended
+// early and CLEANLY, the passthrough closed with it, and curl exited 0 on a
+// fragment. GitHub direct was whole 3 of 3, and a ranged GET through this worker
+// (bytes=300000000-399999999) returned exactly 100,000,000 bytes: the bytes are
+// there, the long stream is what dies. So an early end is answered with a Range
+// re-fetch of the SAME url from the byte we stopped at.
+//
+// RESUME_STALLS bounds CONSECUTIVE attempts that add no bytes (progress resets
+// it). RESUME_FETCHES bounds the total: a release download is a redirect, so
+// each re-fetch costs two subrequests, and 20 of them stay under the 50 a
+// free-plan invocation is allowed.
+const RESUME_STALLS = 5;
+const RESUME_FETCHES = 20;
+
+// `Content-Range: bytes <start>-<end>/<total|*>` -> absolute numbers, or null.
+function parseContentRange(value) {
+  const m = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec((value || '').trim());
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return null;
+  return { start, end, total: m[3] === '*' ? null : Number(m[3]) };
+}
+
+// The absolute byte span a 200/206 upstream response PROMISES, or null when it
+// promises nothing we can hold it to (no length, or a content-encoded body whose
+// Content-Length counts compressed bytes while the reader yields decoded ones).
+function promisedSpan(upstream) {
+  const enc = (upstream.headers.get('Content-Encoding') || 'identity').toLowerCase();
+  if (enc !== 'identity') return null;
+  if (upstream.status === 206) return parseContentRange(upstream.headers.get('Content-Range'));
+  if (upstream.status !== 200) return null;
+  const raw = upstream.headers.get('Content-Length');
+  if (raw === null || !/^\d+$/.test(raw.trim())) return null;
+  const total = Number(raw);
+  if (!Number.isSafeInteger(total)) return null;
+  return { start: 0, end: total - 1, total };
+}
+
+// Write bytes [span.start, span.end] of `url` into the writer, starting with the
+// already-open response `first`. Returns only when EVERY promised byte was
+// written; otherwise it throws, and the caller aborts the stream so the client
+// sees a failed transfer — never a clean short one.
+async function pumpResumable(url, first, span, writer, what) {
+  let offset = span.start;
+  let resp = first;
+  let stalls = 0;
+  let fetches = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const before = offset;
+    if (resp && resp.body) {
+      const reader = resp.body.getReader();
+      while (offset <= span.end) {
+        let step;
+        try {
+          step = await reader.read();
+        } catch (_e) {
+          break; // the upstream connection died mid-body: resume from `offset`
+        }
+        if (step.done) break; // ended — early or not, `offset` decides below
+        const value = step.value;
+        if (!value || !value.byteLength) continue;
+        // Never write past the promise: a FixedLengthStream throws on overrun.
+        const room = span.end - offset + 1;
+        // A failed WRITE is the client going away, not the upstream: it is NOT
+        // caught here, so it ends the pump instead of fetching for nobody.
+        await writer.write(value.byteLength > room ? value.subarray(0, room) : value);
+        offset += Math.min(value.byteLength, room);
+      }
+      try { await reader.cancel(); } catch (_) { /* already closed or errored */ }
+    }
+    if (offset > span.end) return;
+    stalls = offset > before ? 0 : stalls + 1;
+    if (stalls >= RESUME_STALLS) {
+      throw new Error(`upstream ${what} made no progress at byte ${offset} of ${span.end + 1}`);
+    }
+    fetches += 1;
+    if (fetches > RESUME_FETCHES) {
+      throw new Error(`upstream ${what} still short at byte ${offset} after ${RESUME_FETCHES} resumes`);
+    }
+    if (stalls > 0) await new Promise((r) => setTimeout(r, 500));
+    resp = null;
+    let next;
+    try {
+      next = await fetch(url, {
+        method: 'GET',
+        headers: { Range: `bytes=${offset}-${span.end}` },
+        redirect: 'follow',
+      });
+    } catch (_e) {
+      continue; // counted as a stall on the next pass
+    }
+    // Only a 206 that STARTS at our offset and describes the same object may be
+    // spliced in. A 200 means the Range was ignored (the body restarts at byte
+    // 0), a 429/5xx is an error page — writing either would corrupt the file
+    // while still satisfying Content-Length.
+    const cr = next.status === 206 ? parseContentRange(next.headers.get('Content-Range')) : null;
+    const sameObject = cr && (cr.total === null || span.total === null || cr.total === span.total);
+    if (cr && cr.start === offset && sameObject) {
+      resp = next;
+    } else if (next.body) {
+      try { await next.body.cancel(); } catch (_) { /* nothing to drain */ }
+    }
+  }
+}
+
+// Answer a GET with the promised span of one upstream asset: explicit
+// Content-Length, body pumped by pumpResumable.
+function serveResumable(url, upstream, span, name) {
+  const length = span.end - span.start + 1;
+  const headers = new Headers(upstream.headers);
+  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  // GitHub releases answer octet-stream for EVERYTHING, including .js —
+  // `import()` refuses that MIME (measured 2026-08-26). The upstream
+  // headers are copied for Content-Range/ETag, but the TYPE is always ours.
+  headers.set('Content-Type', contentTypeFor(name));
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Length', String(length));
+  // FixedLengthStream is what makes the runtime SEND that Content-Length instead
+  // of chunking, and it refuses to close short — so even a bug in the pump cannot
+  // produce a clean fragment. The TransformStream arm is serveChunked's mechanism,
+  // kept for runtimes without it.
+  const { readable, writable } = typeof FixedLengthStream === 'function'
+    ? new FixedLengthStream(length)
+    : new TransformStream();
+  (async () => {
+    const writer = writable.getWriter();
+    try {
+      await pumpResumable(url, upstream, span, writer, name);
+      await writer.close();
+    } catch (e) {
+      try { await writer.abort(e); } catch (_) { /* already aborted */ }
+    }
+  })();
+  return new Response(readable, { status: upstream.status, headers });
+}
+
 /**
  * R2 first. Everything below is unchanged and stays as the fallback.
  *
@@ -342,6 +485,14 @@ export default {
           // transient (rate limit) — retry, never serve the error as bytes
           continue;
         }
+        // The normal case: the upstream says how many bytes it owes, so we
+        // promise them and resume an early end (the clean-fragment class,
+        // measured 2026-10-02). This also covers the 206/0 and dead-first-chunk
+        // classes below — an empty body is just a resume from the first byte.
+        const span = promisedSpan(upstream);
+        if (span) return serveResumable(base + name, upstream, span, name);
+        // No promise to hold the upstream to (416, an unsized or encoded body):
+        // the passthrough below, unchanged.
         const reader = upstream.body.getReader();
         let first;
         try {
