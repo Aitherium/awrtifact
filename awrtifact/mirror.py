@@ -338,8 +338,12 @@ def mirror_hf_repo(source: str, repo: str, release: str | None = None, *,
                    work_dir: Path | None = None, seed_workflow: bool = True,
                    dry_run: bool = False, fetch=hf._fetch_json,
                    log=None, create_repo: bool | None = None,
-                   seal: bool = False, seal_key: Path | None = None) -> dict:
+                   seal: bool = False, seal_key: Path | None = None,
+                   dedupe_from: str | None = None) -> dict:
     """Mirror a whole Hub repo into `repo`'s release. Returns the report.
+
+    dedupe_from: an earlier release of the same set; files unchanged since it are
+          served from it instead of being uploaded again (mirrorset.link_previous).
 
     lane: auto (cloud when the workflow exists or can be seeded, else local),
           cloud (dispatch only), local (stream through this box), plan (no
@@ -351,6 +355,13 @@ def mirror_hf_repo(source: str, repo: str, release: str | None = None, *,
     data = plan_hf_repo(source, repo, release, token=token, part_size=part_size,
                         prefix=prefix, fetch=fetch)
     release = data["target"]["release"]
+    linked = None
+    if dedupe_from:
+        from . import fetchset as _fetchset
+        prev = _fetchset.load_set_from_release(repo, dedupe_from, data["name"])
+        linked = mirrorset.link_previous(data, prev)
+        log(f"dedupe: {linked['linked']} file(s), {linked['linked_bytes']} bytes "
+            f"served from {dedupe_from}")
     items_all = mirrorset.plan_missing(data, set())
     report: dict = {
         "lane": "plan", "repo": repo, "release": release, "set": data["name"],
@@ -358,6 +369,7 @@ def mirror_hf_repo(source: str, repo: str, release: str | None = None, *,
         "files": len(data["files"]), "bytes": data["total"],
         "sha_unknown": sum(1 for f in data["files"] if not f.get("sha256")),
         "items_total": len(items_all),
+        "dedupe": linked,
     }
     if seal:
         # Refuse up front: a mirror believed signed and not is worse than an

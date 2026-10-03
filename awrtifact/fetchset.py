@@ -155,9 +155,11 @@ def fetch_set(data: dict, dest: Path, *, only: list[str] | None = None,
     report = {"fetched": 0, "up_to_date": 0, "unverified": [], "failed": [],
               "bytes": 0, "files": 0, "dest": str(dest)}
     wanted = set(only or [])
+    home = release
     for f in data["files"]:
         if wanted and f["path"] not in wanted:
             continue
+        release = f.get("from_release") or home  # a linked file lives in an earlier release
         report["files"] += 1
         out = dest / Path(*f["path"].split("/"))
         if ".." in f["path"].split("/") or out.resolve().parent != out.parent.resolve() \

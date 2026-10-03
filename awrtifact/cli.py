@@ -152,6 +152,7 @@ def _cmd_mirror(args: argparse.Namespace) -> int:
                 seed_workflow=not args.no_seed, dry_run=args.dry_run,
                 seal=args.seal or bool(args.seal_key),
                 seal_key=Path(args.seal_key) if args.seal_key else None,
+                dedupe_from=args.dedupe_from or None,
                 create_repo=({"private": False, "public": True}.get(args.create_repo)),
                 log=lambda msg: print(f"  {msg}", file=sys.stderr),
             )
@@ -315,6 +316,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seal", action="store_true",
                    help="sign the set manifest with awseal (default key) and upload the seal")
     p.add_argument("--seal-key", default="", help="awseal private key path (implies --seal)")
+    p.add_argument("--dedupe-from", default="",
+                   help="earlier release of this set: unchanged files are served from it, "
+                        "not uploaded again")
     p.set_defaults(func=_cmd_mirror)
 
     p = sub.add_parser("fetch-set", help="restore a mirrored HF repo from a release")

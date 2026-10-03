@@ -120,3 +120,21 @@ def test_private_repo_falls_back_to_gh(monkeypatch, tmp_path):
     assert calls == [("o/r", "rel", "a b.bin")]
     with pytest.raises(fetch_mod.FetchError, match="wanted 6"):
         fetchset._download(fetchset.release_asset_url("o/r", "rel", "a b.bin"), tmp_path / "b", 6)
+
+
+def test_fetch_set_reads_a_linked_file_from_its_release_and_verifies_it(tmp_path):
+    data = _set()
+    prev = _set()
+    prev["target"]["release"] = "rel-old"
+    assert mirrorset.link_previous(data, prev)["linked"] == 1
+    seen = []
+    base = _downloader(_store())
+
+    def dl(url, dest, expected, token=None):
+        seen.append(url)
+        base(url, dest, expected, token)
+    rep = fetchset.fetch_set(data, tmp_path, downloader=dl)
+    assert not rep["failed"]
+    assert any("/rel-old/onnx__model.onnx.part0" in u for u in seen)
+    assert any("/rel/config.json" in u for u in seen)
+    assert (tmp_path / "onnx" / "model.onnx").read_bytes() == BIG

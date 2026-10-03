@@ -35,6 +35,14 @@ kept beside it; a fetch writes to `path`, never to `asset`. Two paths mapping to
 one asset name is refused up front rather than letting the second upload
 clobber the first — GitHub answers 200 to a clobber.
 
+CROSS-RELEASE DEDUPE (2026-10-03). Each Hub revision gets its own release, and a
+new revision usually changes a config file and leaves multi-GB weight shards
+byte-identical -- which were uploaded again in full. `link_previous()` marks every
+file whose path, size, sha256 and part layout match the previous mirror with
+`"from_release": "<tag>"`: that file is served from the release that already holds
+it, is never uploaded again, and `fetch-set` downloads it from there and still
+verifies its sha256. Only files with a KNOWN sha256 are ever linked.
+
 `sha256` is the LFS oid the Hub publishes (already the whole-file sha256) or
 `null` for a non-LFS file until the local lane has read the bytes. A `null`
 survives into the fetch report as "unverified" — never as a pass.
@@ -181,6 +189,13 @@ def validate(data: dict) -> dict:
         sha = f.get("sha256")
         if sha is not None and (not isinstance(sha, str) or not _HEX64.match(sha)):
             raise MirrorSetError(f"sha256 for {f['path']} must be 64 hex or null")
+        if "from_release" in f:
+            if not isinstance(f["from_release"], str) or not f["from_release"]:
+                raise MirrorSetError(f"from_release for {f['path']} must be a release tag")
+            if not sha:
+                raise MirrorSetError(
+                    f"{f['path']} is served from {f['from_release']} without a sha256: "
+                    f"a linked file must be verifiable")
         parts = f["parts"]
         if not isinstance(parts, list):
             raise MirrorSetError(f"parts for {f['path']} must be a list")
@@ -224,6 +239,8 @@ def expected_assets(data: dict) -> dict[str, int]:
     """Every asset name the release must carry, with its exact size."""
     out: dict[str, int] = {}
     for f in data["files"]:
+        if f.get("from_release"):
+            continue  # served from the release that already holds it
         if f["parts"]:
             for p in f["parts"]:
                 out[p["name"]] = p["size"]
@@ -242,6 +259,8 @@ def plan_missing(data: dict, present: dict[str, int] | set[str]) -> list[dict]:
         have = {n: None for n in present}
     items: list[dict] = []
     for f in data["files"]:
+        if f.get("from_release"):
+            continue
         if f["parts"]:
             offset = 0
             for idx, p in enumerate(f["parts"]):
@@ -257,6 +276,29 @@ def plan_missing(data: dict, present: dict[str, int] | set[str]) -> list[dict]:
                               "offset": 0, "size": f["size"], "whole": True,
                               "sha256": f.get("sha256")})
     return items
+
+
+def link_previous(data: dict, previous: dict) -> dict:
+    """Serve unchanged files from the release that already holds them.
+
+    A file is linked only when the previous set targets the SAME repo and has the
+    same path, size, known sha256 and part layout. Returns
+    {"linked": n, "linked_bytes": n, "from": tag}."""
+    out = {"linked": 0, "linked_bytes": 0, "from": previous["target"]["release"]}
+    if previous["target"]["repo"] != data["target"]["repo"]:
+        return out
+    prev = {f["path"]: f for f in previous["files"]}
+    for f in data["files"]:
+        p = prev.get(f["path"])
+        if not p or not f.get("sha256") or p.get("sha256") != f["sha256"]:
+            continue
+        if p["size"] != f["size"] or [x["size"] for x in p["parts"]] != \
+                [x["size"] for x in f["parts"]] or p["asset"] != f["asset"]:
+            continue
+        f["from_release"] = p.get("from_release") or previous["target"]["release"]
+        out["linked"] += 1
+        out["linked_bytes"] += f["size"]
+    return out
 
 
 def pack_lanes(items: list[dict], max_lanes: int = 20) -> list[list[dict]]:

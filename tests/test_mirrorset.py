@@ -99,3 +99,43 @@ def test_pack_lanes_balances_and_caps():
     assert len(mirrorset.pack_lanes(items, 100)) == len(items)
     with pytest.raises(mirrorset.MirrorSetError):
         mirrorset.pack_lanes(items, 0)
+
+
+# ----------------------------------------------------------------------------- dedupe
+def _rev(release, onnx_sha="c" * 64):
+    files = [hf.HfFile("config.json", 807, None, "a" * 40),
+             hf.HfFile("onnx/model.onnx", 3000, onnx_sha, "b" * 40),
+             hf.HfFile("big.safetensors", GITHUB_ASSET_CAP + 10, "d" * 64, "e" * 40)]
+    return mirrorset.build(files, ref=REF, commit="c", repo="o/r", release=release,
+                           part_size=1_000_000_000)
+
+
+def test_link_previous_serves_unchanged_shards_from_the_earlier_release():
+    old, new = _rev("hf-v1"), _rev("hf-v2", onnx_sha="9" * 64)
+    r = mirrorset.link_previous(new, old)
+    by = {f["path"]: f for f in new["files"]}
+    assert r["linked"] == 1 and by["big.safetensors"]["from_release"] == "hf-v1"
+    assert "from_release" not in by["onnx/model.onnx"]  # changed: uploaded again
+    assert "from_release" not in by["config.json"]       # no sha256: never linked
+    assert mirrorset.validate(new) is new
+    planned = {i["asset"] for i in mirrorset.plan_missing(new, set())}
+    assert not any(a.startswith("big.safetensors") for a in planned)
+    assert "big.safetensors.part0" not in mirrorset.expected_assets(new)
+
+
+def test_link_previous_flattens_a_chain_and_ignores_another_repo():
+    v1, v2, v3 = _rev("hf-v1"), _rev("hf-v2"), _rev("hf-v3")
+    mirrorset.link_previous(v2, v1)
+    mirrorset.link_previous(v3, v2)
+    assert {f["path"]: f.get("from_release") for f in v3["files"]}["big.safetensors"] == "hf-v1"
+    other = _rev("hf-x")
+    other["target"]["repo"] = "someone/else"
+    assert mirrorset.link_previous(_rev("hf-v4"), other)["linked"] == 0
+
+
+def test_validate_refuses_a_linked_file_without_sha256():
+    data = _rev("hf-v2")
+    cfg = next(f for f in data["files"] if f["path"] == "config.json")  # sha256 null
+    cfg["from_release"] = "hf-v1"
+    with pytest.raises(mirrorset.MirrorSetError):
+        mirrorset.validate(data)
