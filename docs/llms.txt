@@ -1,0 +1,40 @@
+# awrtifact
+
+> Deliberately chunk artifacts into GitHub release assets — the productized aitherkvcache mirror lane.
+
+Big artifacts (model weights, datasets, builds) exceed GitHub's 2 GiB release-asset cap, so mirrors end up as bespoke scripts with hardcoded manifests that go stale — the fleet's orchestrator served a pre-v18 build for days while the v18 file sat in a release the worker did not know.
+
+## Install
+
+```
+pip install awrtifact
+```
+
+## In Claude Code
+
+- skill: `/awrtifact`
+
+## Use it in 30 seconds
+
+Store one artifact as a versioned GitHub release and fetch it back byte-verified — `awrtifact mirror <URL|FILE> --release TAG`.
+
+## Composes with
+
+- [awdk](https://aitherium.github.io/awdk/) — Build AI agent fleets — 3 lines, any backend, local or cloud.
+- [awnode](https://aitherium.github.io/awnode/) — A lightweight local gateway — bridges your apps to the AI backends you chose.
+- [aitherkvcache](https://aitherium.github.io/aitherkvcache/) — Near-optimal KV cache quantization for LLM inference — sub-byte compression.
+- [awgit](https://aitherium.github.io/awgit/) — Semantic version control on top of git — edit-ops and leases.
+- [awseal](https://aitherium.github.io/awseal/) — Sign an artifact so a stranger can verify it.
+- [awshare](https://aitherium.github.io/awshare/) — Publish an artifact and fetch it back verified.
+- [awrecover](https://aitherium.github.io/awrecover/) — Labelled snapshots with an all-or-nothing restore.
+- [awstorage](https://aitherium.github.io/awstorage/) — Every drive on every node, indexed, classified and diffed -- so you can see what you own before you delete it.
+
+## Where it lives
+
+- Repo: https://github.com/Aitherium/awrtifact
+- Docs: https://aitherium.github.io/awrtifact/
+- Manifest (keys + the one-line adoption story): https://aitherium.github.io/awrtifact/aither-manifest.json
+
+This repository is mirrored from the AitherOS monorepo by `.github/workflows/sync-awrtifact.yml`; hand edits made here are overwritten on the next sync — change the source instead.
+
+Everything Aitherium, in one file for agents: https://aitherium.com/llms.txt
