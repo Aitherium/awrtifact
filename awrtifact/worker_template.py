@@ -372,15 +372,59 @@ function serveResumable(url, upstream, span, name) {
  * A miss returns null and falls straight through to the existing path, so a
  * config slip must degrade to the old lane, never 500 the artifact request.
  */
+// The R2 range get failed: learn the size with a HEAD, then answer the way
+// RFC 9110 14.1.2 says -- 416 with `bytes */size` when no byte of the range
+// exists, otherwise clamp (a suffix longer than the object is the whole
+// object; a last-byte past EOF ends at EOF) and re-read. null = genuine miss,
+// so the flat lane still falls through to its upstreams.
+// `baseHeaders` lets the share route keep its private, no-store headers on the 416.
+async function rangeAfterR2Refusal(bucket, name, m, baseHeaders = null) {
+  let head;
+  try {
+    head = typeof bucket.head === 'function' ? await bucket.head(name) : null;
+  } catch (_e) {
+    return null;
+  }
+  if (!head || typeof head.size !== 'number') return null;
+  const size = head.size;
+  const [, startRaw, endRaw] = m;
+  let r;
+  if (startRaw === '') {
+    const suffix = Number(endRaw);
+    if (endRaw === '' || suffix === 0 || size === 0) return notSatisfiable(size, baseHeaders);
+    r = { offset: Math.max(0, size - suffix), length: Math.min(suffix, size) };
+  } else {
+    const start = Number(startRaw);
+    if (endRaw !== '' && Number(endRaw) < start) return null; // malformed: unchanged
+    if (start >= size) return notSatisfiable(size, baseHeaders);
+    const end = endRaw === '' ? size - 1 : Math.min(Number(endRaw), size - 1);
+    r = { offset: start, length: end - start + 1 };
+  }
+  try {
+    return await bucket.get(name, { range: r });
+  } catch (_e) {
+    return null;
+  }
+}
+
+function notSatisfiable(size, baseHeaders = null) {
+  const h = new Headers(baseHeaders || cors);
+  h.set('Accept-Ranges', 'bytes');
+  h.set('Content-Range', `bytes */${size}`);
+  if (!baseHeaders) h.set('x-weight-source', 'r2');
+  return new Response(null, { status: 416, headers: h });
+}
+
 async function serveFromR2(request, env, name) {
   const bucket = env && env.__R2_BINDING__;
   if (!bucket) return null;
 
   const rangeHeader = request.headers.get('Range');
   let object;
+  let m = null;
   try {
     if (rangeHeader) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+      m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
       if (!m) return null;                 // let the existing parser answer 416
       const [, startRaw, endRaw] = m;
       // R2 wants {offset,length} or {suffix}; translate the three legal forms.
@@ -393,7 +437,17 @@ async function serveFromR2(request, env, name) {
       object = await bucket.get(name);
     }
   } catch (_e) {
-    return null;
+    object = null;
+  }
+  if (!object && m) {
+    // A ranged get that threw or came back empty is EITHER a missing key OR a
+    // range R2 refuses (past EOF, or a span running off the end). Only a HEAD
+    // tells them apart, and it is spent only on this failure path: a served
+    // range, a whole-object get and a refused country (serveR2Set answers 451
+    // before calling here) cost no extra read. Measured 2026-10-07: a past-EOF
+    // range on the gated hunyuan tree answered 404 instead of 416.
+    object = await rangeAfterR2Refusal(bucket, name, m);
+    if (object instanceof Response) return object;
   }
   if (!object) return null;
 
@@ -665,9 +719,24 @@ async function serveShare(request, env, shareId) {
       if (end < start) return shareRefusal(416, 'range not satisfiable');
       r = { offset: start, length: end - start + 1 };
     }
-    object = await bucket.get(grant.object_key, { range: r });
+    // R2 THROWS on a range it cannot satisfy (past EOF, oversized suffix). That
+    // used to escape as an uncaught 500; it now takes the same HEAD-then-416-or-
+    // clamp path as serveFromR2, still strictly after the grant check above.
+    try {
+      object = await bucket.get(grant.object_key, { range: r });
+    } catch (_e) {
+      object = null;
+    }
+    if (!object) {
+      object = await rangeAfterR2Refusal(bucket, grant.object_key, m, shareHeaders);
+      if (object instanceof Response) return object;
+    }
   } else {
-    object = await bucket.get(grant.object_key);
+    try {
+      object = await bucket.get(grant.object_key);
+    } catch (_e) {
+      return shareRefusal(503, 'share storage unavailable');
+    }
   }
   if (!object) return shareRefusal(404, 'not found');
 

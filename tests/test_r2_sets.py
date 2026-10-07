@@ -89,16 +89,30 @@ const store = {
   'hunyuan3d-2.1/NOTICE': new TextEncoder().encode('Tencent Hunyuan 3D 2.1 is licensed...'),
 };
 const r2reads = [];
+// Strict like real R2: a range it cannot satisfy in full THROWS (R2 error 10039,
+// InvalidRange) rather than clamping -- which is how a past-EOF Range became 404.
 const WEIGHTS = {
   async get(key, opts) {
     r2reads.push(key);
     const b = store[key];
     if (!b) return null;
     if (opts && opts.range) {
-      const off = opts.range.offset ?? 0, len = opts.range.length ?? (b.length - off);
+      let off, len;
+      if (opts.range.suffix !== undefined) {
+        if (opts.range.suffix > b.length) throw new Error('get: InvalidRange (10039)');
+        off = b.length - opts.range.suffix; len = opts.range.suffix;
+      } else {
+        off = opts.range.offset ?? 0; len = opts.range.length ?? (b.length - off);
+      }
+      if (off >= b.length || len <= 0 || off + len > b.length) throw new Error('get: InvalidRange (10039)');
       return {size: b.length, range: {offset: off, length: len}, body: b.slice(off, off + len)};
     }
     return {size: b.length, body: b};
+  },
+  async head(key) {
+    r2reads.push('HEAD ' + key);
+    const b = store[key];
+    return b ? {size: b.length} : null;
   },
 };
 async function hit(path, country, headers) {
@@ -127,6 +141,26 @@ out.refused_r2_reads = r2reads.length - n;
 out.us_dit = await hit('/hunyuan3d-2.1/hunyuan3d-dit-v2-1/model.fp16.ckpt', 'US');
 out.us_vae = await hit('/hunyuan3d-2.1/hunyuan3d-vae-v2-1/model.fp16.ckpt', 'US');
 out.us_range = await hit('/hunyuan3d-2.1/hunyuan3d-dit-v2-1/model.fp16.ckpt', 'US', {Range: 'bytes=2-4'});
+const DIT = '/hunyuan3d-2.1/hunyuan3d-dit-v2-1/model.fp16.ckpt';
+// The live bug: a range wholly past EOF answered 404 (looked like a missing key).
+out.us_past_eof = await hit(DIT, 'US', {Range: 'bytes=18-28'});
+out.us_at_eof = await hit(DIT, 'US', {Range: 'bytes=8-'});
+// A suffix longer than the object is the WHOLE object (RFC 9110 14.1.2), not an error.
+out.us_big_suffix = await hit(DIT, 'US', {Range: 'bytes=-100'});
+out.us_suffix = await hit(DIT, 'US', {Range: 'bytes=-3'});
+// A last-byte past EOF ends at EOF.
+out.us_over_end = await hit(DIT, 'US', {Range: 'bytes=6-100'});
+out.us_open = await hit(DIT, 'US', {Range: 'bytes=5-'});
+n = before();
+out.us_range_again = await hit(DIT, 'US', {Range: 'bytes=2-4'});
+out.valid_range_reads = r2reads.length - n;
+// A past-EOF range on a MISSING key is still a miss, not a 416.
+out.us_missing_range = await hit('/hunyuan3d-2.1/nope.ckpt', 'US', {Range: 'bytes=18-28'});
+n = before();
+out.de_past_eof = await hit(DIT, 'DE', {Range: 'bytes=18-28'});
+out.refused_range_reads = r2reads.length - n;
+// Flat lane: a ranged R2 miss still falls through to the upstreams.
+out.flat_miss_range = await hit('/elsewhere.gguf', 'US', {Range: 'bytes=18-28'});
 out.us_notice = await hit('/hunyuan3d-2.1/NOTICE', 'US');
 out.us_missing = await hit('/hunyuan3d-2.1/nope.ckpt', 'US');
 out.us_bad = await hit('/hunyuan3d-2.1/a%20b.ckpt', 'US');
@@ -158,6 +192,25 @@ def test_gate_behaviour_under_node(tmp_path):
     assert out["us_vae"]["status"] == 200 and out["us_vae"]["len"] == 2
     assert out["us_range"]["status"] == 206 and out["us_range"]["len"] == 3
     assert out["us_range"]["range"] == "bytes 2-4/8"
+    # Past EOF: 416 with the whole size, not a 404 that reads as "no such file".
+    for k in ("us_past_eof", "us_at_eof"):
+        assert out[k]["status"] == 416, (k, out[k])
+        assert out[k]["range"] == "bytes */8", (k, out[k])
+        assert out[k]["len"] == 0
+    # Suffix longer than the object: the whole object as a 206.
+    assert out["us_big_suffix"]["status"] == 206, out["us_big_suffix"]
+    assert out["us_big_suffix"]["range"] == "bytes 0-7/8" and out["us_big_suffix"]["len"] == 8
+    assert out["us_suffix"]["status"] == 206 and out["us_suffix"]["range"] == "bytes 5-7/8"
+    assert out["us_over_end"]["status"] == 206 and out["us_over_end"]["range"] == "bytes 6-7/8"
+    assert out["us_over_end"]["len"] == 2
+    assert out["us_open"]["status"] == 206 and out["us_open"]["range"] == "bytes 5-7/8"
+    # A valid range is unaffected and costs exactly one R2 read (no HEAD).
+    assert out["us_range_again"]["status"] == 206 and out["us_range_again"]["range"] == "bytes 2-4/8"
+    assert out["valid_range_reads"] == 1
+    assert out["us_missing_range"]["status"] == 404
+    # A refused country with a Range still never touches R2 (no get, no head).
+    assert out["de_past_eof"]["status"] == 451 and out["refused_range_reads"] == 0
+    assert any(u.endswith("/elsewhere.gguf") for u in out["fetched"]), out["fetched"]
     assert out["us_notice"]["status"] == 200
     assert out["us_missing"]["status"] == 404
     assert out["us_bad"]["status"] == 400

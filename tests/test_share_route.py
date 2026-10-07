@@ -73,17 +73,24 @@ globalThis.fetch = async (url, init) => {
                       {status: 200, headers: {'Content-Type': 'application/json'}});
 };
 const reads = [];
+// Strict like real R2: a range it cannot satisfy in full THROWS (InvalidRange).
 const bucket = {
   async get(key, opts) {
     reads.push(key);
     if (!key.startsWith('share/shr_abcdefgh12/')) return null;
     if (opts && opts.range) {
       const r = opts.range;
+      if (r.suffix !== undefined && r.suffix > 100) throw new Error('get: InvalidRange (10039)');
       const off = r.suffix !== undefined ? 100 - r.suffix : r.offset;
       const len = r.length !== undefined ? r.length : 100 - off;
+      if (off >= 100 || len <= 0 || off + len > 100) throw new Error('get: InvalidRange (10039)');
       return {size: 100, range: {offset: off, length: len}, body: CT.slice(off, off + len)};
     }
     return {size: 100, body: CT};
+  },
+  async head(key) {
+    reads.push('HEAD ' + key);
+    return key.startsWith('share/shr_abcdefgh12/') ? {size: 100} : null;
   },
 };
 const env = {WEIGHTS: bucket};
@@ -100,6 +107,12 @@ out.badTicket = await hit('/s/shr_abcdefgh12?t=bad');
 out.badId = await hit('/s/..%2Fetc?t=good');
 out.whole = await hit('/s/shr_abcdefgh12?t=good');
 out.range = await hit('/s/shr_abcdefgh12', {'X-Share-Ticket': 'good', Range: 'bytes=10-19'});
+const T = {'X-Share-Ticket': 'good'};
+out.pastEof = await hit('/s/shr_abcdefgh12', {...T, Range: 'bytes=110-120'});
+out.bigSuffix = await hit('/s/shr_abcdefgh12', {...T, Range: 'bytes=-1000'});
+out.overEnd = await hit('/s/shr_abcdefgh12', {...T, Range: 'bytes=95-200'});
+out.missing = await hit('/s/shr_missing000', {...T, Range: 'bytes=110-120'});
+out.missingWhole = await hit('/s/shr_missing000?t=good');
 grantMode = 'revoked'; out.revoked = await hit('/s/shr_abcdefgh12?t=good');
 grantMode = 'down'; out.down = await hit('/s/shr_abcdefgh12?t=good');
 grantMode = 'escape'; out.escape = await hit('/s/shr_abcdefgh12?t=good');
@@ -126,8 +139,24 @@ def test_rendered_share_route_fails_closed_under_node(tmp_path):
     assert out["range"]["status"] == 206
     assert out["range"]["len"] == 10 and out["range"]["first"] == 10
     assert out["range"]["cr"] == "bytes 10-19/100"
+    # Past EOF: 416 with the whole size (was an uncaught throw -> 500 at the edge).
+    assert out["pastEof"]["status"] == 416, out["pastEof"]
+    assert out["pastEof"]["cr"] == "bytes */100" and out["pastEof"]["len"] == 0
+    assert out["pastEof"]["cache"] == "private, no-store"
+    # Suffix longer than the object: the whole object as a 206.
+    assert out["bigSuffix"]["status"] == 206, out["bigSuffix"]
+    assert out["bigSuffix"]["cr"] == "bytes 0-99/100" and out["bigSuffix"]["len"] == 100
+    assert out["overEnd"]["status"] == 206 and out["overEnd"]["cr"] == "bytes 95-99/100"
+    assert out["missing"]["status"] == 404 and out["missingWhole"]["status"] == 404
     assert out["revoked"]["status"] == 410
     assert out["down"]["status"] == 503
     assert out["escape"]["status"] == 403
-    # Refusals never touched the bucket: exactly the two served requests read it.
-    assert out["reads"] == ["share/shr_abcdefgh12/ciphertext.bin"] * 2
+    # Refusals never touched the bucket: only the served/R2-checked requests read it,
+    # and a valid range or whole get costs one read with no HEAD.
+    ok, miss = "share/shr_abcdefgh12/ciphertext.bin", "share/shr_missing000/ciphertext.bin"
+    assert out["reads"] == [ok, ok,
+                            ok, "HEAD " + ok,          # pastEof -> 416
+                            ok, "HEAD " + ok, ok,      # bigSuffix -> clamp, re-read
+                            ok, "HEAD " + ok, ok,      # overEnd -> clamp, re-read
+                            miss, "HEAD " + miss,      # missing ranged -> 404
+                            miss]                      # missing whole -> 404
