@@ -62,6 +62,8 @@ def render(spec: dict, spec_path: Path, worker: dict | None = None) -> tuple[str
         .replace("__ALLOWED_SRC__", spec.get("allowlist", {}).get("regex", ""))
         .replace("__WHOLE_JSON__", json.dumps(spec_mod.whole_names(spec)))
         .replace("__CHUNKED_JSON__", json.dumps(chunked, indent=2))
+        .replace("__R2_SETS_JSON__", json.dumps(spec_mod.r2_sets(spec), indent=2,
+                                                sort_keys=True))
         .replace("__SHARE_ROUTE_JS__", share_js)
         .replace("__SHARE_ROUTE_DISPATCH__", share_dispatch)
         .replace("__SHOP_ROUTE_JS__", shop_js)

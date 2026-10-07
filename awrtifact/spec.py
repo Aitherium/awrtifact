@@ -42,9 +42,23 @@ Shape:
         part_names: []                   # optional asset names for `parts` (else .partN)
         repo: Aitherium/awnix            # optional; else store.repo
 
+    r2_sets:                             # optional; R2-ONLY, path-preserving, gated
+      - prefix: hunyuan3d-2.1            # URL /<prefix>/<path> -> R2 key <prefix>/<path>
+        deny_countries: [GB, KR]         # ISO-3166 alpha-2; refused with HTTP 451
+        deny_unknown: true               # no/unknown country (XX, T1) is refused too
+        reason: "licence territory"      # sent in the 451 body
+        licence_url: https://...         # where the restriction comes from
+
     shop:                                # optional; /shop/<product>/latest -> 302
       - product: saga                    # lowercase slug, the URL segment
         artifact: shop-saga-zip          # an artifacts[].id; its release+name is the target
+
+An ``r2_sets`` entry serves a whole directory tree from R2 and NOTHING else:
+no GitHub upstream, no chunked map, no flat-name lookup. It exists for weights
+whose licence restricts WHERE they may be distributed (Tencent Hunyuan 3D 2.1
+excludes the EU, UK and South Korea): a public release would hand the bytes to
+everyone, so the bytes live only in the private bucket and the one door is the
+worker, which refuses the excluded countries before touching R2.
 
 An artifact whose total exceeds GitHub's 2 GiB cap is CHUNKED (parts derived
 uniformly: N full slices + one tail). An artifact at or under the cap is
@@ -157,7 +171,65 @@ def validate(spec: dict) -> dict:
             if part_size > GITHUB_ASSET_CAP:
                 raise ValueError(f"artifact {name}: part_size exceeds the 2 GiB cap")
     shop_map(spec)  # raises on a bad shop row
+    r2_sets(spec)   # raises on a bad r2_sets row
     return spec
+
+
+_R2_PREFIX = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+_COUNTRY = re.compile(r"^[A-Z]{2}$")
+#: Codes that LOOK like countries and are not, each a way a deny list leaves a
+#: territory open: the gate compares against ISO codes, so the real one is never denied.
+_NOT_ISO = {"UK": "use GB", "EL": "Greece is GR", "EU": "list the member states",
+            "AP": "not a country", "XX": "unknown is deny_unknown",
+            "T1": "Tor is deny_unknown", "ZZ": "not a country",
+            "IC": "reserved (Canary Islands, Spain = ES)",
+            "EA": "reserved (Ceuta/Melilla, Spain = ES)",
+            "FX": "reserved (metropolitan France = FR)"}
+
+
+def r2_sets(spec: dict) -> dict:
+    """prefix -> {deny, deny_unknown, reason, licence_url}, validated.
+
+    A prefix must not shadow a release (the /<release>/<file> route) or the
+    worker's own routes, and every country must be an ISO-3166 alpha-2 code --
+    a typo like ``UK`` (the real code is ``GB``) would silently leave a
+    restricted territory open, so it is refused rather than accepted.
+    """
+    rows = spec.get("r2_sets") or []
+    if not isinstance(rows, list):
+        raise ValueError("spec.r2_sets must be a list")
+    releases = set(path_upstreams(spec)) if spec.get("store", {}).get("repo") else set()
+    reserved = {"shop", "s", "__health"}
+    out: dict[str, dict] = {}
+    for row in rows:
+        row = row or {}
+        prefix = row.get("prefix")
+        if not isinstance(prefix, str) or not _R2_PREFIX.match(prefix):
+            raise ValueError(f"spec.r2_sets prefix must be a lowercase slug: {prefix!r}")
+        if prefix in out:
+            raise ValueError(f"spec.r2_sets: duplicate prefix {prefix!r}")
+        if prefix in releases or prefix in reserved:
+            raise ValueError(f"spec.r2_sets prefix {prefix!r} shadows a release or a "
+                             f"worker route")
+        deny = row.get("deny_countries") or []
+        if not isinstance(deny, list) or not all(isinstance(c, str) and _COUNTRY.match(c)
+                                                 for c in deny):
+            raise ValueError(f"spec.r2_sets {prefix}: deny_countries must be ISO-3166 "
+                             f"alpha-2 codes (e.g. GB, not UK)")
+        fake = sorted(set(deny) & set(_NOT_ISO))
+        if fake:
+            hint = ", ".join(f"{c} -> {_NOT_ISO[c]}" for c in fake)
+            raise ValueError(f"spec.r2_sets {prefix}: not ISO-3166 alpha-2 country codes: "
+                             f"{hint}")
+        reason = row.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"spec.r2_sets {prefix}: reason is required -- a 451 that "
+                             f"does not say why reads as an outage")
+        out[prefix] = {"deny": sorted(set(deny)),
+                       "deny_unknown": bool(row.get("deny_unknown", True)),
+                       "reason": reason.strip(),
+                       "licence_url": str(row.get("licence_url") or "")}
+    return out
 
 
 _SHOP_PRODUCT = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")

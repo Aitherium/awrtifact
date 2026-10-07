@@ -12,6 +12,7 @@ Sentinel tokens (never valid in generated output):
     __ALLOWED_SRC__        regex source string
     __WHOLE_JSON__         array of whole-file names
     __CHUNKED_JSON__       name → {upstream, parts:[{name,size}]}
+    __R2_SETS_JSON__       prefix → {deny, deny_unknown, reason, licence_url}
     __SHARE_ROUTE_JS__     the Aither Share byte route, or "" (opt-in per worker)
     __SHARE_ROUTE_DISPATCH__  its dispatch line in fetch(), or ""
     __SHOP_ROUTE_JS__      the /shop/<product>/latest redirect, or "" (opt-in per worker)
@@ -48,7 +49,12 @@ const WHOLE = new Set(__WHOLE_JSON__);
 // client asks for by the original filename. Range requests are translated into
 // per-part sub-ranges. The manifest is GENERATED from the awrtifact spec — never
 // hand-edited (a hand-edited entry is exactly how a stale build ships).
-const CHUNKED = __CHUNKED_JSON__;__SHARE_ROUTE_JS____SHOP_ROUTE_JS__
+const CHUNKED = __CHUNKED_JSON__;
+// R2-only, path-preserving, country-gated trees (spec `r2_sets`). Served from
+// the private bucket and NOTHING else: no GitHub upstream, no chunked map, no
+// flat-name fallback -- the whole point is that the worker is the only door.
+const R2_SETS = __R2_SETS_JSON__;
+const SAFE_KEY = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;__SHARE_ROUTE_JS____SHOP_ROUTE_JS__
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -417,6 +423,33 @@ async function serveFromR2(request, env, name) {
   return new Response(object.body, { status: 200, headers });
 }
 
+/*
+ * A gated R2 tree. Country first, BEFORE any storage access: a refused request
+ * must not cost a read, and it must not leak whether the key exists. 451 is the
+ * status for exactly this ("Unavailable For Legal Reasons", RFC 7725).
+ */
+async function serveR2Set(request, env, segs) {
+  const set = R2_SETS[segs[0]];
+  const country = ((request.cf && request.cf.country) || '').toUpperCase();
+  // XX = unknown, T1 = Tor; EU / AP are continent-only geo-IP answers. None names a
+  // country, so none can prove the request is inside the licensed territory.
+  const unknown = !country || !/^[A-Z]{2}$/.test(country) ||
+                  ['XX', 'T1', 'EU', 'AP', 'ZZ', 'UK', 'EL', 'IC', 'EA', 'FX'].includes(country);
+  if ((unknown && set.deny_unknown) || set.deny.includes(country)) {
+    const h = new Headers(cors);
+    h.set('Content-Type', 'text/plain; charset=utf-8');
+    if (set.licence_url) h.set('Link', `<${set.licence_url}>; rel="blocked-by"`);
+    return new Response(`unavailable in your region: ${set.reason}\n`, { status: 451, headers: h });
+  }
+  const key = segs.join('/');
+  if (!SAFE_KEY.test(key) || segs.some(s => s === '.' || s === '..')) {
+    return new Response('bad path\n', { status: 400, headers: cors });
+  }
+  const served = await serveFromR2(request, env, key);
+  if (served) return served;
+  return new Response('not found\n', { status: 404, headers: cors });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
@@ -435,6 +468,9 @@ export default {
     // (e.g. two tokenizer.json) coexist; the flat route keeps the legacy
     // first-match behaviour.
     const segs = new URL(request.url).pathname.split('/').filter(Boolean);
+    if (segs.length >= 2 && Object.prototype.hasOwnProperty.call(R2_SETS, segs[0])) {
+      return serveR2Set(request, env, segs);
+    }
     let baseOverride = null;
     if (segs.length >= 2 && PATH_UPSTREAMS[segs[0]]) {
       baseOverride = PATH_UPSTREAMS[segs[0]];
