@@ -98,6 +98,24 @@ is not signed by that key.
 Set `AWRTIFACT_GH_BACKEND=api` + `GH_TOKEN` where there is no `gh` binary
 (containers); the same commands run over the REST API.
 
+## Keep the parts in an AitherStrata pool instead (0.4)
+
+The same split manifest, stored in a Strata tier instead of a release. Every part
+lives under its own sha256 inside one tenant's namespace, so a new version sends
+only the parts that changed; a fetch hashes each part before writing it and stops
+at the first one that does not match. GitHub releases stay the default.
+
+```bash
+pip install 'awrtifact[strata]'          # the transport is awstorage's StrataTarget
+export AWSTORAGE_STRATA_BEARER=...       # a tenant-scoped token (never sent with a fleet key)
+awrtifact split model.gguf --part-size 200000000 --out parts/
+awrtifact strata-push parts/manifest.json --tenant tnt_mine
+awrtifact strata-fetch model.gguf --tenant tnt_mine --out ./restore --sha256 <whole-file sha>
+```
+
+A part is one object in one request, so parts over 256 MiB are refused up front;
+split smaller for this backend.
+
 ## Clients of the contract
 
 The chunk contract (`.partN` slices + per-part and whole sha256, under

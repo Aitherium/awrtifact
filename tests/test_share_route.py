@@ -160,3 +160,47 @@ def test_rendered_share_route_fails_closed_under_node(tmp_path):
                             ok, "HEAD " + ok, ok,      # overEnd -> clamp, re-read
                             miss, "HEAD " + miss,      # missing ranged -> 404
                             miss]                      # missing whole -> 404
+
+
+_PREFIX_HARNESS = r"""
+import worker from './index.mjs';
+const reads = [];
+// A bucket that answers ANY key: if the public lane ever resolves a `share/...`
+// request to a name, this serves it -- so a 404 here is the guard, not a miss.
+const bucket = {
+  async get(key) { reads.push(key); return {size: 3, body: new Uint8Array([1, 2, 3])}; },
+  async head(key) { reads.push('HEAD ' + key); return {size: 3}; },
+};
+globalThis.fetch = async () => new Response('no upstream', {status: 404});
+async function hit(path) {
+  const req = new Request('https://artifact.aitherium.com' + path);
+  return (await worker.fetch(req, {WEIGHTS: bucket})).status;
+}
+const out = {};
+out.control = await hit('/ciphertext.bin');
+const before = reads.length;
+out.nested = await hit('/share/shr_abcdefgh12/ciphertext.bin');
+out.seal = await hit('/share/shr_abcdefgh12/awseal.json');
+out.bare = await hit('/share');
+out.shareReads = reads.slice(before);
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("share_url", [None, "https://api.example.com/api/share/grant-check"])
+def test_public_lane_refuses_the_share_prefix_under_node(tmp_path, share_url):
+    # An allowlist that admits the share objects' bare names, so the ONLY thing
+    # standing between `/share/<id>/ciphertext.bin` and the bucket is the guard.
+    spec = _spec(share_url)
+    spec["allowlist"] = {"regex": r"^[A-Za-z0-9._-]+\.(bin|json)$"}
+    js, _ = serve_spec.render(spec, tmp_path / "awrtifact.yaml")
+    (tmp_path / "index.mjs").write_text(js, encoding="utf-8")
+    (tmp_path / "harness.mjs").write_text(_PREFIX_HARNESS, encoding="utf-8")
+    proc = subprocess.run(["node", "harness.mjs"], cwd=tmp_path, capture_output=True,
+                          text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["control"] == 200, out  # the harness CAN serve a public bare name
+    assert out["nested"] == 404 and out["seal"] == 404 and out["bare"] == 404, out
+    assert out["shareReads"] == [], out  # refused before the bucket is touched

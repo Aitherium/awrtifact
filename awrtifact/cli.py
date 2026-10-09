@@ -7,6 +7,8 @@
     awrtifact fetch NAME --url BASE --out DIR [--expected N] [--verify-only]
     awrtifact serve-spec SPEC [--emit-dir DIR] [--check]
     awrtifact backup-catalog SPEC [--workflow W] [--dry-run]
+    awrtifact strata-push MANIFEST [--tenant T] [--tier warm] [--dir DIR]
+    awrtifact strata-fetch NAME --out DIR [--tenant T] [--tier warm] [--sha256 HEX]
 
 Exit codes: 0 ok · 1 operational failure (upload failed, fetch short, drift) ·
 2 usage or data error (bad manifest/spec, missing dependency).
@@ -348,7 +350,64 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_backup)
 
+    p = sub.add_parser("strata-push",
+                       help="put a split artifact's parts into an AitherStrata pool "
+                            "(content addressed; unchanged parts are not re-sent)")
+    p.add_argument("manifest")
+    p.add_argument("--tenant", default="", help="pool tenant (else $AWSTORAGE_STRATA_TENANT)")
+    p.add_argument("--tier", default="warm", choices=("hot", "warm", "cold"))
+    p.add_argument("--dir")
+    p.set_defaults(func=_cmd_strata_push)
+
+    p = sub.add_parser("strata-fetch",
+                       help="stitch an artifact back from an AitherStrata pool, verified")
+    p.add_argument("name")
+    p.add_argument("--out", required=True)
+    p.add_argument("--tenant", default="", help="pool tenant (else $AWSTORAGE_STRATA_TENANT)")
+    p.add_argument("--tier", default="warm", choices=("hot", "warm", "cold"))
+    p.add_argument("--sha256", default=None,
+                   help="pin the whole-file digest (from a lockfile or spec, not the pool)")
+    p.set_defaults(func=_cmd_strata_fetch)
+
     return parser
+
+
+def _strata_store(args: argparse.Namespace):
+    from .backends import strata as strata_mod  # noqa: PLC0415 -- optional backend
+
+    return strata_mod, strata_mod.from_env(args.tenant or None, args.tier)
+
+
+def _cmd_strata_push(args: argparse.Namespace) -> int:
+    try:
+        strata_mod, store = _strata_store(args)
+    except Exception as exc:  # noqa: BLE001 - backend unavailable is a usage error
+        return _die(str(exc))
+    try:
+        m = manifest_mod.load(Path(args.manifest))
+        result = store.upload(m, Path(args.dir) if args.dir else Path(args.manifest).parent)
+    except (ValueError, OSError, strata_mod.StrataBackendError) as exc:
+        return _die(str(exc), 1)
+    print(f"pooled {len(result['uploaded'])} part(s); "
+          f"{len(result['skipped_present'])} already in the pool; manifest {result['manifest']}")
+    for f in result["failed"]:
+        print(f"  FAILED: {f}", file=sys.stderr)
+    return 1 if result["failed"] else 0
+
+
+def _cmd_strata_fetch(args: argparse.Namespace) -> int:
+    try:
+        strata_mod, store = _strata_store(args)
+    except Exception as exc:  # noqa: BLE001
+        return _die(str(exc))
+    try:
+        m = store.load_manifest(args.name)
+        result = store.fetch(m, Path(args.out), expected_sha256=args.sha256)
+    except (ValueError, OSError, strata_mod.StrataBackendError) as exc:
+        return _die(str(exc), 1)
+    print(f"{result['status']}: {result['path']} ({result['bytes']} bytes, "
+          f"sha256 {result['sha256'][:16]}...)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

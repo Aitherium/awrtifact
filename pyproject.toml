@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrtifact"
-version = "0.3.0"
+version = "0.4.0"
 description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,6 +17,7 @@ license = { text = "Apache-2.0" }
 [project.optional-dependencies]
 spec = ["PyYAML>=6.0"]
 seal = ["awseal>=0.1"]
+strata = ["awstorage>=0.5.4"]
 
 [project.urls]
 Homepage = "https://github.com/Aitherium/awrtifact"
@@ -28,7 +29,7 @@ Issues = "https://github.com/Aitherium/awrtifact/issues"
 awrtifact = "awrtifact.cli:main"
 
 [tool.setuptools]
-packages = ["awrtifact", "awrtifact.data.gobbonet", "awrtifact.data.workflows"]
+packages = ["awrtifact", "awrtifact.backends", "awrtifact.data.gobbonet", "awrtifact.data.workflows"]
 
 # provision-repo seeds these into the user's repo — they must ride the wheel.
 [tool.setuptools.package-data]

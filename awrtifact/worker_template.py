@@ -522,6 +522,12 @@ export default {
     // (e.g. two tokenizer.json) coexist; the flat route keeps the legacy
     // first-match behaviour.
     const segs = new URL(request.url).pathname.split('/').filter(Boolean);
+    // Aither Share ciphertext lives under `share/<id>/` in the same bucket; its only
+    // door is the grant-checked /s/<share> route. Refuse the prefix outright so a
+    // later change to the name resolution below cannot make it publicly readable.
+    if (segs.length >= 1 && segs[0] === 'share') {
+      return new Response('not a known artifact\n', { status: 404, headers: cors });
+    }
     if (segs.length >= 2 && Object.prototype.hasOwnProperty.call(R2_SETS, segs[0])) {
       return serveR2Set(request, env, segs);
     }

@@ -9,4 +9,4 @@ fetched back byte-verified.
 The core is stdlib-only; the spec-shaped commands need PyYAML (extra: `spec`).
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
