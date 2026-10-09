@@ -182,6 +182,22 @@ const out = {
 globalThis.fetch = async () => new Response('missing', { status: 404 });
 const miss = await worker.fetch(new Request('https://weights.aitherium.com/m.gguf'), {});
 out.missStatus = miss.status;
+// The release that HOLDS the file fails transiently; the others honestly 404.
+// Measured 2026-10-08: this answered 404, which reads as "wrong filename".
+globalThis.fetch = async (url) => (String(url).includes('/weights-v1/')
+  ? new Response('bad gateway', { status: 502 })
+  : new Response('missing', { status: 404 }));
+const flaky = await worker.fetch(new Request('https://weights.aitherium.com/m.gguf'), {});
+out.flakyStatus = flaky.status;
+out.flakyRetryAfter = flaky.headers.get('Retry-After');
+const flakyHead = await worker.fetch(new Request('https://weights.aitherium.com/m.gguf', { method: 'HEAD' }), {});
+out.flakyHeadStatus = flakyHead.status;
+globalThis.fetch = async (url) => {
+  if (String(url).includes('/weights-v1/')) throw new TypeError('network connection lost');
+  return new Response('missing', { status: 404 });
+};
+const thrown = await worker.fetch(new Request('https://weights.aitherium.com/m.gguf'), {});
+out.thrownStatus = thrown.status;
 console.log(JSON.stringify(out));
 """
 
@@ -277,3 +293,11 @@ def test_preserved_head_cors_type_and_fallthrough(run):
         # The first upstream 404'd and the second answered.
         assert got["missed"] == 1, key
     assert run["missStatus"] == 404
+
+
+def test_transient_upstream_failure_is_503_never_404(run):
+    """A 404 means "no upstream has this name"; it must not be claimed after a 5xx/throw."""
+    assert run["flakyStatus"] == 503
+    assert run["flakyRetryAfter"] == "5"
+    assert run["flakyHeadStatus"] == 503
+    assert run["thrownStatus"] == 503

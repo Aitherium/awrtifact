@@ -552,10 +552,29 @@ export default {
     // missing asset, so the fallback cost is one small miss per unknown name.
     // A prefixed path has exactly ONE candidate (its own release).
     const candidates = baseOverride ? [baseOverride] : UPSTREAMS;
+    // Whether any upstream failed TRANSIENTLY (429/5xx, a thrown fetch, a dead or
+    // empty first chunk). If one did, "not found" is a lie: the file may be on that
+    // upstream. Measured 2026-10-08: a CI range probe got HTTP 404 for
+    // Bonsai-4B-Q1_0.gguf, which the mirror serves (206) on every other probe --
+    // transient misses on the release that holds it fell through to the releases
+    // that do not, and the worker answered 404. An installer reads a 404 as "wrong
+    // name" and the checker as "our mirror serves nothing"; a 503 says what
+    // happened and that a retry may work.
+    let transient = false;
     for (const base of candidates) {
       if (request.method === 'HEAD') {
-        const upstream = await fetch(base + name, { method: 'HEAD', redirect: 'follow' });
+        let upstream;
+        try {
+          upstream = await fetch(base + name, { method: 'HEAD', redirect: 'follow' });
+        } catch (_e) {
+          transient = true;
+          continue;
+        }
         if (upstream.status === 404 || upstream.status === 410) continue;
+        if (upstream.status === 429 || upstream.status >= 500) {
+          transient = true;
+          continue;
+        }
         const headers = new Headers(upstream.headers);
         for (const [k, v] of Object.entries(cors)) headers.set(k, v);
         headers.set('Cache-Control', 'public, max-age=31536000, immutable');
@@ -565,14 +584,22 @@ export default {
       // GET with retry on an EMPTY body (the 206/0 class, measured 2026-08-28).
       // Streaming-safe: only the first chunk is awaited to decide.
       for (let attempt = 1; attempt <= 3; attempt++) {
-        const upstream = await fetch(base + name, {
-          method: 'GET',
-          headers: request.headers.has('Range') ? { Range: request.headers.get('Range') } : {},
-          redirect: 'follow',
-        });
+        if (attempt > 1) await new Promise((r) => setTimeout(r, 500 * (attempt - 1)));
+        let upstream;
+        try {
+          upstream = await fetch(base + name, {
+            method: 'GET',
+            headers: request.headers.has('Range') ? { Range: request.headers.get('Range') } : {},
+            redirect: 'follow',
+          });
+        } catch (_e) {
+          transient = true; // connection refused/reset before any status
+          continue;
+        }
         if (upstream.status === 404 || upstream.status === 410) break; // next upstream
         if (upstream.status === 429 || upstream.status >= 500) {
           // transient (rate limit) — retry, never serve the error as bytes
+          transient = true;
           continue;
         }
         // The normal case: the upstream says how many bytes it owes, so we
@@ -592,11 +619,14 @@ export default {
           // same class as streamUpstream (measured 2026-09-01 at ~40% of cold
           // Cloudflare->GitHub fetches); a throw here is NOT the empty-body
           // check below, and uncaught it aborts the response after the status
-          // was sent. Back off and retry the fetch.
-          await new Promise((r) => setTimeout(r, 500));
+          // was sent. Retry the fetch (the loop head backs off).
+          transient = true;
           continue;
         }
-        if (!first.value) continue; // empty first chunk (0-length or done) — retry
+        if (!first.value) {
+          transient = true;
+          continue; // empty first chunk (0-length or done) — retry
+        }
         const body = new ReadableStream({
           async start(controller) {
             if (first.value) controller.enqueue(first.value);
@@ -620,6 +650,11 @@ export default {
       }
     }
     const headers = new Headers(cors);
+    if (transient) {
+      headers.set('Retry-After', '5');
+      headers.set('Cache-Control', 'no-store');
+      return new Response('mirror upstream unavailable (transient), retry\n', { status: 503, headers });
+    }
     return new Response('not found on any mirror upstream\n', { status: 404, headers });
   },
 };
