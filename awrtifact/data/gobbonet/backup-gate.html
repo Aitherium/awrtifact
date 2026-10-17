@@ -110,7 +110,7 @@
     if (!core) { setStatus("mod not loaded — hard-refresh the page.", "bad"); return; }
     goBtn.disabled = true;
     setStatus("Downloading, verifying, decrypting…");
-    core.restoreBackup("", repo, tag, pass, function (name, i, n) {
+    core.restoreBackup("", repo.split("/")[0], repo.split("/")[1], pass, tag, function (name, i, n) {
       setStatus("part " + i + "/" + n + " — " + name);
     }).then(function (files) {
       files.forEach(function (f) {

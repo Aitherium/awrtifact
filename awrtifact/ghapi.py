@@ -126,6 +126,12 @@ def _release(repo: str, release: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def list_releases(repo: str) -> list[str]:
+    """Every release tag in the repo, in GitHub's order (newest first)."""
+    rows = _paged(f"{API}/repos/{repo}/releases?per_page=100")
+    return [r["tag_name"] for r in rows if isinstance(r, dict) and r.get("tag_name")]
+
+
 def release_exists(repo: str, release: str) -> bool:
     return _release(repo, release) is not None
 

@@ -9,6 +9,8 @@
     awrtifact backup-catalog SPEC [--workflow W] [--dry-run]
     awrtifact strata-push MANIFEST [--tenant T] [--tier warm] [--dir DIR]
     awrtifact strata-fetch NAME --out DIR [--tenant T] [--tier warm] [--sha256 HEX]
+    awrtifact companion-backup PERSONA --repo OWNER/NAME [--passphrase-env VAR] [--allow-public]
+    awrtifact companion-restore PERSONA --repo OWNER/NAME [--tag TAG] [--passphrase-env VAR]
 
 Exit codes: 0 ok · 1 operational failure (upload failed, fetch short, drift) ·
 2 usage or data error (bad manifest/spec, missing dependency).
@@ -23,6 +25,8 @@ from pathlib import Path
 
 from . import __version__, gh
 from . import backup as backup_mod
+from . import companion as companion_mod
+from . import envelope as envelope_mod
 from . import fetch as fetch_mod
 from . import fetchset as fetchset_mod
 from . import hf as hf_mod
@@ -235,6 +239,51 @@ def _cmd_backup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _companion_passphrase(args: argparse.Namespace, confirm: bool) -> str:
+    return companion_mod.passphrase_from_env_or_prompt(args.passphrase_env, confirm=confirm)
+
+
+def _cmd_companion_backup(args: argparse.Namespace) -> int:
+    try:
+        envelope_mod.require_crypto()
+        passphrase = _companion_passphrase(args, confirm=True)
+        extra = {}
+        if args.card:
+            extra[Path(args.card).name] = Path(args.card)
+        result = companion_mod.backup(
+            args.persona_id, args.repo, passphrase,
+            recall_root=Path(args.recall_dir) if args.recall_dir else None,
+            extra_files=extra, awm_scope=args.awm_scope or None,
+            allow_public=args.allow_public, provision=not args.no_provision,
+        )
+    except envelope_mod.CryptoUnavailableError as exc:
+        return _die(str(exc), 2)
+    except (companion_mod.CompanionBackupError, envelope_mod.EnvelopeError) as exc:
+        return _die(str(exc), 2)
+    except (OSError, gh.GhError) as exc:
+        return _die(str(exc), 1)
+    print(f"release {result['tag']} in {result['repo']}: {len(result['assets'])} asset(s)")
+    return 0
+
+
+def _cmd_companion_restore(args: argparse.Namespace) -> int:
+    try:
+        envelope_mod.require_crypto()
+        passphrase = _companion_passphrase(args, confirm=False)
+        report = companion_mod.restore(
+            args.persona_id, args.repo, passphrase, tag=args.tag or None,
+            recall_root=Path(args.recall_dir) if args.recall_dir else None,
+        )
+    except envelope_mod.CryptoUnavailableError as exc:
+        return _die(str(exc), 2)
+    except (companion_mod.CompanionBackupError, envelope_mod.EnvelopeError) as exc:
+        return _die(str(exc), 2)
+    except (OSError, gh.GhError) as exc:
+        return _die(str(exc), 1)
+    gh.print_json(report)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="awrtifact",
@@ -343,6 +392,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--no-pages", action="store_true", help="skip the Pages enable")
     p.set_defaults(func=_cmd_provision)
+
+    for verb, helptext in (
+        ("companion-backup", "encrypt a companion's memories into a new private release"),
+        ("companion-restore", "restore a companion's memories (append-only merge)"),
+    ):
+        # allow_abbrev=False: otherwise `--passphrase SECRET` silently matches
+        # --passphrase-env and the secret lands in argv AND an error message.
+        p = sub.add_parser(verb, help=helptext, allow_abbrev=False)
+        p.add_argument("persona_id")
+        p.add_argument("--repo", required=True, help="OWNER/NAME (private; created if missing)")
+        p.add_argument("--passphrase-env", default=companion_mod.DEFAULT_PASSPHRASE_ENV,
+                       help="env var holding the passphrase (else a no-echo prompt; "
+                            "never an argument)")
+        p.add_argument("--recall-dir", default="", help="recall root (default: resolved)")
+        if verb == "companion-backup":
+            p.add_argument("--card", default="", help="a card/persona JSON to include")
+            p.add_argument("--awm-scope", default="", help="awm scope to export, if awm can")
+            p.add_argument("--allow-public", action="store_true",
+                           help="accept a PUBLIC repo (persona ids leak in tags/names)")
+            p.add_argument("--no-provision", action="store_true",
+                           help="fail instead of creating a missing repo")
+            p.set_defaults(func=_cmd_companion_backup)
+        else:
+            p.add_argument("--tag", default="", help="release tag (default: newest)")
+            p.set_defaults(func=_cmd_companion_restore)
 
     p = sub.add_parser("backup-catalog", help="dispatch mirror runs for gaps")
     p.add_argument("spec")

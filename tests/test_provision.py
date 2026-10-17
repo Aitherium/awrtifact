@@ -129,7 +129,7 @@ def test_seeded_assets_byte_pinned() -> None:
     drifted while the content was unchanged)."""
     pinned = {
         "gobbonet-backup.js": "0988cca66798dcb83a6abcf71f5b70d77b02080503d1e600c3bf3548de347981",
-        "backup-gate.html": "ea6ed2757f069d1d94ec8e977f50dcbc4bd4699fe67249898a9f20c7e97029b9",
+        "backup-gate.html": "faab1ee23bed4b19f8108a8c011de0a2da4255e21bc3a925a5eafd9aaf025219",
     }
     for name, want in pinned.items():
         data = (provision.DATA_DIR / name).read_bytes().replace(b"\r\n", b"\n")

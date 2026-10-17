@@ -198,6 +198,45 @@ def repo_view(repo: str) -> dict | None:
     return {"url": proc.stdout.strip()}
 
 
+def repo_private(repo: str) -> bool | None:
+    """True private, False public, None when the repo does not exist.
+
+    Raises GhError when visibility cannot be READ for an existing repo -- a
+    caller deciding "is it safe to put names here" must fail closed, never
+    treat an unreadable answer as private.
+    """
+    if _api():
+        info = _wrap(ghapi.repo_view, repo)
+        if info is None:
+            return None
+        return bool(info.get("private", True))
+    proc = _run(["repo", "view", repo, "--json", "visibility", "--jq", ".visibility"])
+    if proc.returncode != 0:
+        if repo_view(repo) is None:
+            return None
+        raise GhError(f"gh repo view {repo}: cannot read visibility: {proc.stderr.strip()}")
+    vis = proc.stdout.strip().upper()
+    if vis in ("PRIVATE", "INTERNAL"):
+        return True
+    if vis == "PUBLIC":
+        return False
+    raise GhError(f"gh repo view {repo}: unknown visibility {vis!r}")
+
+
+def list_releases(repo: str, prefix: str = "") -> list[str]:
+    """Release tags in the repo (newest first as GitHub orders them), filtered
+    by `prefix`. Empty list when the repo has none."""
+    if _api():
+        tags = _wrap(ghapi.list_releases, repo)
+    else:
+        proc = _run(["release", "list", "--repo", repo, "--limit", "1000",
+                     "--json", "tagName", "--jq", ".[].tagName"])
+        if proc.returncode != 0:
+            raise GhError(f"gh release list {repo}: {proc.stderr.strip()}")
+        tags = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    return [t for t in tags if t.startswith(prefix)]
+
+
 def repo_create(repo: str, public: bool) -> None:
     """Create the repo under the authed account/org. The gh CLI keeps the
     invite/confirm prompts off with --confirm; the visibility flag is the

@@ -18,6 +18,7 @@ license = { text = "Apache-2.0" }
 spec = ["PyYAML>=6.0"]
 seal = ["awseal>=0.1"]
 strata = ["awstorage>=0.5.4"]
+crypto = ["cryptography>=41"]
 
 [project.urls]
 Homepage = "https://github.com/Aitherium/awrtifact"
