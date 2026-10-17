@@ -263,6 +263,13 @@ def _cmd_companion_backup(args: argparse.Namespace) -> int:
     except (OSError, gh.GhError) as exc:
         return _die(str(exc), 1)
     print(f"release {result['tag']} in {result['repo']}: {len(result['assets'])} asset(s)")
+    try:
+        index = companion_mod.record_backup(args.persona_id, result["repo"], result["tag"])
+        print(f"recorded in {index} (the next `awsettings --domain companions push` carries it)")
+    except (companion_mod.CompanionBackupError, OSError) as exc:
+        # The backup itself landed; only the pointer a new machine restores from
+        # did not. Say so loudly instead of failing a good backup.
+        print(f"warning: backup not recorded in the companions index: {exc}", file=sys.stderr)
     return 0
 
 

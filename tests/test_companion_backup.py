@@ -354,3 +354,53 @@ def test_passphrase_env_that_is_not_a_name_is_not_echoed(capsys) -> None:
     assert rc == 2
     err = capsys.readouterr().err
     assert PASS not in err and "must name an environment variable" in err
+
+
+# ---------------------------------------------------------------------------
+# the companions index: where a wiped machine finds the backup
+# ---------------------------------------------------------------------------
+
+def test_cli_backup_records_repo_and_tag_in_the_index(recall: Path, fake_gh: FakeGhCli,
+                                                      monkeypatch, capsys) -> None:
+    index = Path(os.environ["AWSETTINGS_COMPANIONS_FILE"])
+    index.write_text(json.dumps({"version": 1, "roster_dir": "/here", "companions": {
+        "lyra": {"persona_id": "lyra", "display_name": "Lyra", "folder": "lyra"},
+        "kai": {"persona_id": "kai"}}}), encoding="utf-8")
+    monkeypatch.setenv("MY_PASS", PASS)
+    assert cli.main(["companion-backup", "lyra", "--repo", "me/mem", "--passphrase-env",
+                     "MY_PASS", "--recall-dir", str(recall)]) == 0
+    data = json.loads(index.read_text(encoding="utf-8"))
+    rec = data["companions"]["lyra"]
+    assert rec["backup_repo"] == "me/mem"
+    assert rec["last_backup_tag"] in fake_gh.releases
+    assert rec["display_name"] == "Lyra" and rec["folder"] == "lyra"   # kept
+    assert data["companions"]["kai"] == {"persona_id": "kai"}           # untouched
+    assert data["roster_dir"] == "/here"
+    out = capsys.readouterr()
+    assert PASS not in index.read_text(encoding="utf-8")
+    assert PASS not in out.out and PASS not in out.err
+
+
+def test_record_backup_adds_an_unindexed_companion_and_refuses_bad_shapes(tmp_path) -> None:
+    path = tmp_path / "c.json"
+    companion.record_backup("lyra", "me/mem", "companion-lyra-20261016T000000Z", path)
+    assert json.loads(path.read_text(encoding="utf-8"))["companions"]["lyra"] == {
+        "persona_id": "lyra", "backup_repo": "me/mem",
+        "last_backup_tag": "companion-lyra-20261016T000000Z"}
+    with pytest.raises(companion.CompanionBackupError):
+        companion.record_backup("lyra", "me/mem; rm -rf /", "companion-x", path)
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(companion.CompanionBackupError):
+        companion.record_backup("lyra", "me/mem", "companion-lyra-1", path)
+    assert path.read_text(encoding="utf-8") == "{not json"   # never overwritten
+
+
+def test_cli_backup_survives_an_unreadable_index(recall: Path, fake_gh: FakeGhCli,
+                                                 monkeypatch, capsys) -> None:
+    index = Path(os.environ["AWSETTINGS_COMPANIONS_FILE"])
+    index.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("MY_PASS", PASS)
+    assert cli.main(["companion-backup", "lyra", "--repo", "me/mem", "--passphrase-env",
+                     "MY_PASS", "--recall-dir", str(recall)]) == 0
+    assert "not recorded in the companions index" in capsys.readouterr().err
+    assert index.read_text(encoding="utf-8") == "{broken"

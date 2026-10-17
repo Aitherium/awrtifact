@@ -16,3 +16,12 @@ def _pin_cli_backend(monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("HF_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_companions_index(tmp_path_factory, monkeypatch):
+    """`companion-backup` records itself in the per-user companions index; a test
+    run must never write the developer's real one."""
+    index = tmp_path_factory.mktemp("companions-index") / "companions.json"
+    monkeypatch.setenv("AWSETTINGS_COMPANIONS_FILE", str(index))
+    return index

@@ -396,6 +396,52 @@ def backup(persona_id: str, repo: str, passphrase: str, *,
         shutil.rmtree(work, ignore_errors=True)
 
 
+#: The per-user companions index awsettings syncs (its ``companions`` domain).
+COMPANIONS_INDEX_ENV = "AWSETTINGS_COMPANIONS_FILE"
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+TAG_RE = re.compile(r"^companion-[A-Za-z0-9._-]{1,200}$")
+
+
+def companions_index_path() -> Path:
+    override = (os.environ.get(COMPANIONS_INDEX_ENV) or "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / ".aither" / "companions.json"
+
+
+def record_backup(persona_id: str, repo: str, tag: str,
+                  index_path: Optional[Path] = None) -> Path:
+    """Note WHERE a companion's backup lives in the companions index, so the next
+    `awsettings push` carries it and a wiped machine can restore from it.
+
+    Only `backup_repo` and `last_backup_tag` are written (plus a minimal record
+    when the companion is not indexed yet); every other entry and field is kept.
+    Never the passphrase. An unreadable index is refused, not overwritten.
+    """
+    pid = validate_persona_id(persona_id)
+    if not REPO_RE.match(repo or "") or not TAG_RE.match(tag or ""):
+        raise CompanionBackupError("repo or tag is not in the shape the index carries")
+    path = Path(index_path) if index_path else companions_index_path()
+    index: dict = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError) as exc:
+            raise CompanionBackupError(f"{path} is unreadable; not overwriting it: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise CompanionBackupError(f"{path} is not a JSON object; not overwriting it")
+        index = loaded
+    companions = index.get("companions") if isinstance(index.get("companions"), dict) else {}
+    prior = companions.get(pid) if isinstance(companions.get(pid), dict) else {}
+    companions[pid] = {**prior, "persona_id": pid, "backup_repo": repo, "last_backup_tag": tag}
+    index.update({"version": index.get("version", 1), "companions": companions})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
 _STAMP_RE = re.compile(r"(\d{8}T\d{6}Z)(?:-(\d+))?")
 
 
