@@ -7,6 +7,7 @@ walked to the end."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -69,14 +70,18 @@ def test_asset_listing_walks_pages(api):
     assert ghapi.release_exists("o/r", "rel") and not ghapi.release_exists("o/r", "missing")
 
 
-def test_upload_clobbers_then_posts_bytes(api, tmp_path):
+def test_upload_clobbers_then_streams_the_file(api, tmp_path, monkeypatch):
     p = tmp_path / "old.bin"
     p.write_bytes(b"hello")
+    streamed = []
+    monkeypatch.setattr(ghapi, "_upload_stream",
+                        lambda url, path: streamed.append((url, Path(path).read_bytes())))
     ghapi.upload("o/r", "rel", str(p))
     methods = [(m, u) for m, u, _ in api.calls]
     assert ("DELETE", "https://api.github.com/repos/o/r/releases/assets/1") in methods
-    posts = [c for c in api.calls if c[0] == "POST" and c[1].startswith("https://uploads")]
-    assert posts and posts[0][1].endswith("?name=old.bin") and posts[0][2] == b"hello"
+    # the body is streamed from disk (never read whole into memory by upload())
+    assert streamed and streamed[0][0].startswith("https://uploads")
+    assert streamed[0][0].endswith("?name=old.bin") and streamed[0][1] == b"hello"
 
 
 def test_dispatch_targets_default_branch(api):

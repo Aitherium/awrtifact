@@ -51,6 +51,23 @@ def _api() -> bool:
     return backend() == "api"
 
 
+# Env vars that carry key material (archive private key, its passphrase).
+# They are stripped from every child environment: a `gh` child, a gh
+# extension or a GH_DEBUG wrapper must never inherit them.
+_NEVER_INHERIT: set[str] = set()
+
+
+def never_inherit(name: str) -> None:
+    if name:
+        _NEVER_INHERIT.add(name.upper() if os.name == "nt" else name)
+
+
+def child_env() -> dict[str, str]:
+    """os.environ minus every never_inherit() name (case-insensitive on Windows)."""
+    norm = (lambda k: k.upper()) if os.name == "nt" else (lambda k: k)
+    return {k: v for k, v in os.environ.items() if norm(k) not in _NEVER_INHERIT}
+
+
 def _run(args: Sequence[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["gh", *args],
@@ -59,6 +76,7 @@ def _run(args: Sequence[str]) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=child_env(),
     )
 
 
@@ -199,7 +217,7 @@ def repo_view(repo: str) -> dict | None:
 
 
 def repo_private(repo: str) -> bool | None:
-    """True private, False public, None when the repo does not exist.
+    """True private, False public OR internal, None when the repo does not exist.
 
     Raises GhError when visibility cannot be READ for an existing repo -- a
     caller deciding "is it safe to put names here" must fail closed, never
@@ -209,16 +227,20 @@ def repo_private(repo: str) -> bool | None:
         info = _wrap(ghapi.repo_view, repo)
         if info is None:
             return None
-        return bool(info.get("private", True))
+        private = info.get("private")
+        if private is None:
+            raise GhError(f"GitHub API {repo}: response carries no visibility")
+        return private is True
     proc = _run(["repo", "view", repo, "--json", "visibility", "--jq", ".visibility"])
     if proc.returncode != 0:
         if repo_view(repo) is None:
             return None
         raise GhError(f"gh repo view {repo}: cannot read visibility: {proc.stderr.strip()}")
     vis = proc.stdout.strip().upper()
-    if vis in ("PRIVATE", "INTERNAL"):
+    if vis == "PRIVATE":
         return True
-    if vis == "PUBLIC":
+    # INTERNAL is readable by every member of the enterprise: NOT private.
+    if vis in ("PUBLIC", "INTERNAL"):
         return False
     raise GhError(f"gh repo view {repo}: unknown visibility {vis!r}")
 
@@ -328,9 +350,31 @@ def secret_set(repo: str, name: str, value: str) -> None:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=child_env(),
     )
     if proc.returncode != 0:
         raise GhError(f"gh secret set {name} --repo {repo} failed (exit {proc.returncode})")
+
+
+def auth_login() -> str:
+    """The login of the account this auth acts as ("" when unknown)."""
+    if _api():
+        return _wrap(ghapi.auth_login)
+    proc = _run(["api", "user", "--jq", ".login"])
+    if proc.returncode != 0:
+        raise GhError(f"gh api user: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def org_role(org: str) -> str | None:
+    """This account's role in `org` ("admin" / "member"), None when it is not
+    a member or `org` is not an organisation."""
+    if _api():
+        return _wrap(ghapi.org_role, org)
+    proc = _run(["api", f"user/memberships/orgs/{org}", "--jq", ".role"])
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 def print_json(payload: dict) -> None:

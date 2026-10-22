@@ -13,7 +13,9 @@
     awrtifact companion-restore PERSONA --repo OWNER/NAME [--tag TAG] [--passphrase-env VAR]
     awrtifact seal-archive FILE --repo OWNER/NAME --tag TAG --recipient PUB|KEYID
     awrtifact unseal-restore --repo OWNER/NAME --tag TAG --out PATH [--key-file F]
-    awrtifact archive-keygen --private-out F --public-out F [--github-secret N --secret-repo R]
+                             [--archive-id ID --expect-sha256 HEX]
+    awrtifact archive-keygen --private-out F --public-out F [--passphrase-file F]
+                             [--github-secret N --secret-repo R]
 
 Exit codes: 0 ok · 1 operational failure (upload failed, fetch short, drift) ·
 2 usage or data error (bad manifest/spec, missing dependency).
@@ -466,7 +468,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "(looked up in --recipients-dir), or the base64 key")
     p.add_argument("--recipients-dir", default="",
                    help="where <keyid>.pub files live (default ~/.aither/recipients)")
-    p.add_argument("--name", default="", help="asset base name (default: the file name)")
+    p.add_argument("--name", default="",
+                   help="file name recorded INSIDE the sealed metadata (default: the "
+                        "file's name); asset names are always the opaque archive id")
     p.add_argument("--part-size", type=int, default=archive_mod.DEFAULT_PART_SIZE)
     p.add_argument("--work-dir", default="", help="scratch dir for ONE part (default: temp)")
     p.add_argument("--json", action="store_true")
@@ -478,11 +482,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", required=True)
     p.add_argument("--tag", required=True)
     p.add_argument("--out", default="", help="output file or directory")
-    p.add_argument("--name", default="", help="archive name when the release holds several")
-    p.add_argument("--key-file", default="", help="file holding the base64 private key")
+    p.add_argument("--name", default="",
+                   help="pick the archive whose SEALED name is this, when the release "
+                        "holds several")
+    p.add_argument("--archive-id", default="",
+                   help="pin the archive (32 hex, recorded at seal time)")
+    p.add_argument("--expect-sha256", default="",
+                   help="refuse unless the archive holds exactly these plaintext bytes "
+                        "(the eviction canary passes the original's sha256)")
+    p.add_argument("--key-file", default="",
+                   help="private key file (raw, or passphrase-protected by archive-keygen)")
+    p.add_argument("--key-stdin", action="store_true",
+                   help="read the private key from stdin")
     p.add_argument("--key-env", default=archive_mod.DEFAULT_KEY_ENV,
-                   help="env var holding the private key when no --key-file "
-                        "(never pass the key as an argument)")
+                   help="env var holding the private key when no --key-file/--key-stdin; "
+                        "removed from the environment as it is read (never argv)")
+    p.add_argument("--passphrase-file", default="",
+                   help="passphrase for a protected key file (else "
+                        f"${archive_mod.DEFAULT_PASSPHRASE_ENV}, else a prompt)")
     p.add_argument("--work-dir", default="", help="scratch dir for ONE part (default: temp)")
     p.add_argument("--verify-only", action="store_true",
                    help="decrypt and check every byte, write nothing (the canary proof)")
@@ -493,12 +510,19 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "archive-keygen", allow_abbrev=False,
         help="make YOUR recipient keypair (run it on the key holder's machine)")
-    p.add_argument("--private-out", required=True, help="private key file (mode 600)")
+    p.add_argument("--private-out", required=True,
+                   help="private key file: passphrase-protected, owner-only")
     p.add_argument("--public-out", required=True, help="public key file (give this out)")
+    p.add_argument("--passphrase-file", default="",
+                   help=f"passphrase source (else ${archive_mod.DEFAULT_PASSPHRASE_ENV}, "
+                        "else a prompt, asked twice)")
+    p.add_argument("--no-passphrase", action="store_true",
+                   help="write the private key UNPROTECTED (not allowed with --github-secret)")
     p.add_argument("--github-secret", default="",
-                   help="also store the private key as this Actions secret ...")
+                   help="also store the PROTECTED private key as this Actions secret ...")
     p.add_argument("--secret-repo", default="",
-                   help="... in this PRIVATE repo of yours (value via stdin, never argv)")
+                   help="... in this PRIVATE repo under YOUR account or an org you "
+                        "administer (value via stdin, never argv)")
     p.add_argument("--force", action="store_true", help="overwrite existing key files")
     p.set_defaults(func=_cmd_archive_keygen)
 
@@ -524,12 +548,15 @@ def _cmd_seal_archive(args: argparse.Namespace) -> int:
             part_size=args.part_size,
             work_dir=Path(args.work_dir) if args.work_dir else None)
         if args.json:
-            shown = {k: v for k, v in result.items() if k != "wraps"}
+            shown = {k: v for k, v in result.items() if k not in ("wraps", "meta")}
             gh.print_json({**shown, "recipient_key_id": kid})
         else:
             print(f"sealed {result['name']}: {result['plain_size']} bytes -> "
                   f"{len(result['parts'])} part(s) in {args.repo}@{args.tag} "
-                  f"for recipient {kid}; peak local ciphertext {result['peak_work_bytes']} B")
+                  f"for recipient {kid}; archive id {result['archive_id']}, plaintext "
+                  f"sha256 {result['plain_sha256']} (record both: an eviction guard "
+                  f"passes them to unseal-restore); peak local ciphertext "
+                  f"{result['peak_work_bytes']} B")
         return 0
     return _archive_errors(run)
 
@@ -537,11 +564,16 @@ def _cmd_seal_archive(args: argparse.Namespace) -> int:
 def _cmd_unseal_restore(args: argparse.Namespace) -> int:
     def run() -> int:
         archive_mod.require_crypto()
-        key = archive_mod.load_private_key(args.key_file, args.key_env)
+        key = archive_mod.load_private_key(
+            args.key_file, args.key_env, key_stdin=args.key_stdin,
+            passphrase_file=args.passphrase_file)
         result = archive_mod.unseal_restore(
             args.repo, args.tag, Path(args.out) if args.out else None, key,
-            name=args.name, work_dir=Path(args.work_dir) if args.work_dir else None,
+            name=args.name, archive_id=args.archive_id,
+            expect_plain_sha256=args.expect_sha256,
+            work_dir=Path(args.work_dir) if args.work_dir else None,
             verify_only=args.verify_only, force=args.force)
+        del key
         if args.json:
             gh.print_json(result)
         else:
@@ -554,13 +586,24 @@ def _cmd_unseal_restore(args: argparse.Namespace) -> int:
 
 def _cmd_archive_keygen(args: argparse.Namespace) -> int:
     def run() -> int:
+        archive_mod.require_crypto()
+        passphrase = None if args.no_passphrase else archive_mod.read_passphrase(
+            args.passphrase_file, confirm=True, prompt="new archive key passphrase: ")
         result = archive_mod.keygen(
-            Path(args.private_out), Path(args.public_out), force=args.force,
-            github_secret=args.github_secret, secret_repo=args.secret_repo)
+            Path(args.private_out), Path(args.public_out), passphrase=passphrase,
+            force=args.force, github_secret=args.github_secret,
+            secret_repo=args.secret_repo)
+        del passphrase
+        state = "passphrase-protected" if result["protected"] else "UNPROTECTED"
         print(f"key id {result['key_id']}: public {result['public']}, "
-              f"private {result['private']} (keep it; nobody else can restore)")
+              f"private {result['private']} ({state}; keep it and the passphrase -- "
+              "nobody else can restore)")
+        if not result["owner_only"]:
+            print("warning: could not restrict the private key file to your account; "
+                  "check its permissions", file=sys.stderr)
         if result["github_secret"]:
-            print(f"private key also stored as Actions secret {result['github_secret']}")
+            print(f"protected private key also stored as Actions secret "
+                  f"{result['github_secret']} (keep the passphrase OUT of GitHub)")
         return 0
     return _archive_errors(run)
 

@@ -94,6 +94,81 @@ def _get(url: str) -> object:
     return _request("GET", url)[2]
 
 
+_STREAM_CHUNK = 1024 * 1024
+_ASSET_HOSTS = ("api.github.com", "uploads.github.com")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib re-sends EVERY header on a redirect, Authorization included, to
+    whatever host the Location names. Asset downloads 302 to a presigned
+    storage URL: follow those by hand, without the token."""
+
+    def redirect_request(self, *args, **kwargs):  # noqa: ANN002, ANN003 — urllib signature
+        return None
+
+
+def _auth_headers(accept: str) -> dict[str, str]:
+    tok = token()
+    if not tok:
+        raise GhApiError(0, "no GitHub token (GH_TOKEN / GITHUB_TOKEN) for the API backend")
+    return {"Authorization": f"Bearer {tok}", "Accept": accept,
+            "User-Agent": _USER_AGENT, "X-GitHub-Api-Version": "2022-11-28"}
+
+
+def _stream_to(resp, dest: str) -> int:
+    written = 0
+    with open(dest, "wb") as fh:
+        for block in iter(lambda: resp.read(_STREAM_CHUNK), b""):
+            fh.write(block)
+            written += len(block)
+    return written
+
+
+def _download_stream(url: str, dest: str) -> int:
+    """GET `url` into `dest` in 1 MiB blocks. The bearer goes ONLY to a GitHub
+    API host; a redirect to storage is followed without it."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    headers = _auth_headers("application/octet-stream")
+    location = url
+    for _ in range(5):
+        host = urllib.parse.urlsplit(location).hostname or ""
+        hdrs = dict(headers) if host in _ASSET_HOSTS else {"User-Agent": _USER_AGENT}
+        req = urllib.request.Request(location, method="GET", headers=hdrs)
+        try:
+            with opener.open(req, timeout=300) as resp:  # noqa: S310
+                return _stream_to(resp, dest)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (301, 302, 303, 307, 308) and exc.headers.get("Location"):
+                location = urllib.parse.urljoin(location, exc.headers["Location"])
+                continue
+            where = location.split("?", 1)[0]
+            raise GhApiError(exc.code, f"GET {where}: download failed") from exc
+        except urllib.error.URLError as exc:
+            raise GhApiError(0, f"GET {location.split('?', 1)[0]}: unreachable "
+                                f"({exc.reason})") from exc
+    raise GhApiError(0, f"GET {url}: too many redirects")
+
+
+def _upload_stream(url: str, path: Path) -> None:
+    """POST a file as the request body without reading it into memory."""
+    headers = _auth_headers("application/vnd.github+json")
+    headers["Content-Type"] = "application/octet-stream"
+    headers["Content-Length"] = str(path.stat().st_size)
+    with path.open("rb") as fh:
+        req = urllib.request.Request(url, data=fh, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=3600) as resp:  # noqa: S310
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            try:
+                msg = exc.read(2048).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — the status is the finding; the body is detail
+                msg = ""
+            raise GhApiError(exc.code, f"POST {url}: {msg.strip()}") from exc
+        except urllib.error.URLError as exc:
+            raise GhApiError(0, f"POST {url}: unreachable ({exc.reason})") from exc
+
+
 def _paged(url: str) -> list:
     """Follow `Link: rel="next"` to the end; a paged list read once is a lie."""
     out: list = []
@@ -173,22 +248,17 @@ def upload(repo: str, release: str, path: str) -> None:
     upload_url = rel.get("upload_url", "").split("{", 1)[0]
     if not upload_url:
         upload_url = f"{UPLOADS}/repos/{repo}/releases/{rel['id']}/assets"
-    data = p.read_bytes()
     url = f"{upload_url}?name={urllib.parse.quote(name)}"
-    _request("POST", url, data, content_type="application/octet-stream")
+    _upload_stream(url, p)
 
 
 def download_asset(repo: str, release: str, name: str, dest: str) -> int:
     """Download one asset through the API (works for PRIVATE repos, where the
-    browser_download_url answers 404 without auth). Returns bytes written."""
+    browser_download_url answers 404 without auth), streamed to `dest`; the
+    token never follows the redirect to storage. Returns bytes written."""
     for a in _assets(repo, release):
         if a.get("name") == name:
-            url = f"{API}/repos/{repo}/releases/assets/{a['id']}"
-            _, _, raw = _request("GET", url, accept="application/octet-stream")
-            if not isinstance(raw, (bytes, bytearray)):
-                raw = json.dumps(raw).encode("utf-8") if raw is not None else b""
-            Path(dest).write_bytes(raw)
-            return len(raw)
+            return _download_stream(f"{API}/repos/{repo}/releases/assets/{a['id']}", dest)
     raise GhApiError(404, f"asset {name} not in release {release} of {repo}")
 
 
@@ -226,9 +296,36 @@ def repo_view(repo: str) -> dict | None:
         raise
     if not isinstance(data, dict):
         return None
+    # `visibility` is authoritative (internal is NOT private); a bare `private`
+    # counts only when it is literally true/false; neither = unknown (None),
+    # which a privacy guard must treat as a refusal.
+    vis = str(data.get("visibility") or "").lower()
+    if vis:
+        private = vis == "private"
+    elif isinstance(data.get("private"), bool):
+        private = data["private"]
+    else:
+        private = None
     return {"url": data.get("html_url", f"https://github.com/{repo}"),
             "default_branch": data.get("default_branch", "main"),
-            "private": bool(data.get("private", True))}
+            "private": private}
+
+
+def auth_login() -> str:
+    me = _get(f"{API}/user")
+    return str(me.get("login") or "") if isinstance(me, dict) else ""
+
+
+def org_role(org: str) -> str | None:
+    try:
+        data = _get(f"{API}/user/memberships/orgs/{urllib.parse.quote(org)}")
+    except GhApiError as exc:
+        if exc.status in (403, 404):
+            return None
+        raise
+    if not isinstance(data, dict) or data.get("state") not in (None, "active"):
+        return None
+    return str(data.get("role") or "") or None
 
 
 def repo_create(repo: str, public: bool) -> None:

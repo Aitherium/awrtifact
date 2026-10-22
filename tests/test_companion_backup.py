@@ -340,9 +340,12 @@ def test_cli_without_passphrase_noninteractive_refuses(recall: Path, fake_gh: Fa
 
 
 def test_repo_private_reads_visibility(monkeypatch) -> None:
-    fake = FakeGhCli("INTERNAL")
+    fake = FakeGhCli("PRIVATE")
     monkeypatch.setattr(gh, "_run", fake.run)
     assert gh.repo_private("o/r") is True
+    # INTERNAL is readable by the whole enterprise: never treated as private
+    fake.visibility = "INTERNAL"
+    assert gh.repo_private("o/r") is False
     fake.visibility = "PUBLIC"
     assert gh.repo_private("o/r") is False
     fake.visibility = None
