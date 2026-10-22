@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awrtifact"
-version = "0.4.0"
+version = "0.5.0"
 description = "Aither World Artifact — deliberately chunk artifacts into GitHub release assets and fetch them back byte-verified. The productized aitherkvcache mirror lane."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,8 @@ spec = ["PyYAML>=6.0"]
 seal = ["awseal>=0.1"]
 strata = ["awstorage>=0.5.4"]
 crypto = ["cryptography>=41"]
+# seal-archive / unseal-restore: AES-256-GCM + a libsodium SealedBox recipient wrap.
+archive = ["cryptography>=41", "PyNaCl>=1.5"]
 
 [project.urls]
 Homepage = "https://github.com/Aitherium/awrtifact"

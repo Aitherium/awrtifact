@@ -315,5 +315,23 @@ def download_asset(repo: str, release: str, name: str, dest: str) -> int:
     return _os.path.getsize(dest)
 
 
+def secret_set(repo: str, name: str, value: str) -> None:
+    """Store an Actions secret in `repo`. The value goes to `gh secret set` on
+    STDIN -- never argv, never a log line, never the error text."""
+    if _api():
+        raise GhError("storing a secret needs the gh CLI (AWRTIFACT_GH_BACKEND=cli)")
+    proc = subprocess.run(
+        ["gh", "secret", "set", name, "--repo", repo],
+        input=value,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise GhError(f"gh secret set {name} --repo {repo} failed (exit {proc.returncode})")
+
+
 def print_json(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))

@@ -116,6 +116,51 @@ awrtifact strata-fetch model.gguf --tenant tnt_mine --out ./restore --sha256 <wh
 A part is one object in one request, so parts over 256 MiB are refused up front;
 split smaller for this backend.
 
+## Sealed archives: the sealer can write, only the key holder can read (0.5)
+
+Encrypt a large file to YOUR public key and keep the ciphertext in YOUR private
+repo. Whoever runs `seal-archive` (a platform, a backup job, an agent) cannot
+decrypt what it wrote. No platform key and no escrow wrap exist.
+
+```bash
+pip install 'awrtifact[archive]'                     # cryptography + PyNaCl
+# 1. on YOUR machine: make the keypair; optionally keep the private key as an
+#    Actions secret in your own private repo (sent on stdin, never argv)
+awrtifact archive-keygen --private-out ~/.aither/archive.key --public-out archive.pub \
+    --github-secret AITHER_ARCHIVE_KEY --secret-repo you/your-lockbox
+# 2. anyone holding only archive.pub can seal into a PRIVATE repo (public = exit 2)
+awrtifact seal-archive scene.zip --repo you/your-archive --tag frozen-202610 --recipient archive.pub
+# 3. only the private key restores; --verify-only proves it without writing anything
+awrtifact unseal-restore --repo you/your-archive --tag frozen-202610 --verify-only --key-file ~/.aither/archive.key
+awrtifact unseal-restore --repo you/your-archive --tag frozen-202610 --out ./restore --key-file ~/.aither/archive.key
+```
+
+- **Format**: AWSH1 segmented AES-256-GCM (1 MiB segments; index and final flag in
+  nonce and AAD, so reordering or truncating is refused) under a fresh random key
+  per file. That key is wrapped with a libsodium SealedBox to the recipient's
+  Curve25519 key. This is the same `recipient.pub` format the tenant backups use.
+- **Streaming**: RAM holds one segment. Disk holds one part at a time: each part
+  is uploaded and deleted before the next is written, so extra disk stays at or
+  below 1x the file plus 16 bytes per MiB. Parts are under 2 GiB (default 1.9 GB).
+- **Manifest** `<name>.sealed.json` goes up LAST. It records each part's
+  ciphertext sha256, the whole-ciphertext sha256 and the plaintext sha256 and
+  size. A release without a manifest is an interrupted seal, and restore refuses
+  it. The plaintext sha256 lets anyone who can READ the repo confirm a guess of
+  the exact file, which is one more reason the repo must stay private.
+- **Fails closed**: if the key is wrong, a part was tampered with, a part is
+  missing, a GCM tag fails or the plaintext sha256 does not match, the command
+  exits 1 and leaves nothing at `--out`. Output goes to `.partial` and is renamed
+  only after every check passes.
+- **Transport**: authenticated `gh` only (`gh release upload/download`). The
+  commands never touch a public URL or the artifact.aitherium.com worker.
+  `--recipient` takes a `.pub` path, the base64 key, or a 16-hex key id looked up
+  as `~/.aither/recipients/<id>.pub` (`AWRTIFACT_RECIPIENTS_DIR`).
+- **Not authenticated**: a third party with write access to the repo could swap
+  in a whole archive of its own, sealed to your public key. Sign the manifest
+  with awseal if you need to know who sealed it.
+- **Actions secret caveat**: GitHub never shows a secret again. A workflow in
+  that repo can read it; you cannot. Keep the key file, or a paper copy, as well.
+
 ## Clients of the contract
 
 The chunk contract (`.partN` slices + per-part and whole sha256, under
