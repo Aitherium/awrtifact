@@ -3,7 +3,7 @@
 `seal-archive` streams one file into AES-256-GCM ciphertext under a fresh
 per-object data key (DEK), wraps that DEK to the KEY HOLDER's Curve25519 public
 key (libsodium SealedBox -- the same recipient mechanism and key format as the
-GargBot tenant backup, `backup_envelope.seal_dek_pubkey`, and the generated
+tenant appliance backup, `backup_envelope.seal_dek_pubkey`, and the generated
 tenant repo's `recipient.pub`), and uploads the ciphertext as release assets of
 a PRIVATE GitHub repo. Only the holder of the private key can run
 `unseal-restore`; whoever sealed it cannot, because the DEK leaves this process
