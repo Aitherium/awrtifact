@@ -4,6 +4,7 @@
     awrtifact plan MANIFEST --repo OWNER/REPO --release TAG
     awrtifact upload MANIFEST --repo OWNER/REPO --release TAG [--dir DIR] [--parallel N] [--create]
     awrtifact verify MANIFEST [--dir DIR]
+    awrtifact promote TAG --from OWNER/PRIVATE --to OWNER/PUBLIC --expect-key HEX [--dry-run]
     awrtifact fetch NAME --url BASE --out DIR [--expected N] [--verify-only]
     awrtifact serve-spec SPEC [--emit-dir DIR] [--check]
     awrtifact backup-catalog SPEC [--workflow W] [--dry-run]
@@ -92,6 +93,27 @@ def _cmd_upload(args: argparse.Namespace) -> int:
         for f in result["failed"]:
             print(f"  FAILED: {f}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cmd_promote(args: argparse.Namespace) -> int:
+    from . import promote as promote_mod
+    try:
+        plan = promote_mod.promote(args.source, args.dest, args.release,
+                                   expect_key=args.expect_key, dry_run=args.dry_run,
+                                   title=args.title or "", notes=args.notes or "")
+    except promote_mod.PromoteError as exc:
+        return _die(f"promotion refused: {exc}", code=1)
+    except (OSError, gh.GhError) as exc:
+        return _die(str(exc))
+    if args.json:
+        gh.print_json(plan.to_dict())
+    else:
+        verb = "would promote" if plan.dry_run else "promoted"
+        print(f"{verb} {len(plan.assets)} asset(s): {plan.source} -> {plan.dest} {plan.release}")
+        print(f"  sealed by {plan.signer[:16]}...")
+        if not plan.dry_run:
+            print(f"  {plan.to_dict()['url']}")
     return 0
 
 
@@ -332,6 +354,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=_cmd_verify)
+
+    p = sub.add_parser("promote",
+                       help="copy a SEALED release from a private repo to a public one")
+    p.add_argument("release", help="the release tag to promote")
+    p.add_argument("--from", dest="source", required=True,
+                   help="OWNER/NAME of the private repo")
+    p.add_argument("--to", dest="dest", required=True, help="OWNER/NAME of the public repo")
+    p.add_argument("--expect-key", required=True,
+                   help="the awseal public key the release must be sealed by")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run every check, upload nothing")
+    p.add_argument("--title")
+    p.add_argument("--notes")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=_cmd_promote)
 
     p = sub.add_parser("fetch", help="resumable, verified download")
     p.add_argument("name")
