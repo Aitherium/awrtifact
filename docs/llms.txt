@@ -10,6 +10,10 @@ Big artifacts (model weights, datasets, builds) exceed GitHub's 2 GiB release-as
 pip install awrtifact
 ```
 
+## In Claude Code
+
+- skill: `/awrtifact`
+
 ## Use it in 30 seconds
 
 Store one artifact as a versioned GitHub release and fetch it back byte-verified — `awrtifact mirror <URL|FILE> --release TAG`.
