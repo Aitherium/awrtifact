@@ -17,5 +17,15 @@
     "awrecover",
     "awstorage"
   ],
-  "includes": []
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 76,
+      "as_of": "2026-11-08T07:46:23-08:00"
+    },
+    "tests": {
+      "value": 23,
+      "as_of": "2026-11-08T07:46:23-08:00"
+    }
+  }
 }
