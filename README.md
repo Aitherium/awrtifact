@@ -4,7 +4,7 @@
 
 **[Docs](https://aitherium.github.io/awrtifact/)**  ·  [Source](https://github.com/Aitherium/awrtifact)  ·  `pip install awrtifact`  ·  [The Aither World](https://aitherium.github.io/)
 
-> **The Aither World** is an operating system for agents — a Linux you can hand to one, the runtimes it works in, and the tools it works with. [awnix](https://github.com/Aitherium/awnix) is the Linux underneath it; **awrtifact** is one of its 71 bricks — each installs on its own, runs offline, and needs no account. 5 more are in development and 15 are planned.
+> **The Aither World** is an operating system for agents — a Linux you can hand to one, the runtimes it works in, and the tools it works with. [awnix](https://github.com/Aitherium/awnix) is the Linux underneath it; **awrtifact** is one of its 71 bricks — each installs on its own, runs offline, and needs no account. 6 more are in development and 15 are planned.
 >
 > **Start here:** Store one artifact as a versioned GitHub release and fetch it back byte-verified — `awrtifact mirror <URL|FILE> --release TAG`.
 
