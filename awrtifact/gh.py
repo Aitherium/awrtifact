@@ -33,6 +33,31 @@ class GhError(RuntimeError):
     """A gh invocation failed — message carries gh's stderr."""
 
 
+# The public model/repo mirror. Brand, Discord, sticker, emoji and soundboard
+# packs are product deliverables, never mirror content: on 2026-11-13/14 two
+# Discord packs were released here and the owner had them deleted (11-17).
+PUBLIC_MIRROR_REPOS = frozenset({"aitherium/aitherkvcache"})
+_PACK_WORDS = ("discord", "sticker", "emoji", "soundboard", "expression-pack")
+
+
+class PublicMirrorRefusedError(GhError):
+    """A brand/Discord pack was aimed at the public mirror repo."""
+
+
+def refuse_pack_on_public_mirror(repo: str, *names: str) -> None:
+    """Raise if ``repo`` is the public mirror and any name looks like a pack."""
+    if repo.strip().lower() not in PUBLIC_MIRROR_REPOS:
+        return
+    for name in names:
+        low = os.path.basename(str(name)).lower()
+        hit = next((w for w in _PACK_WORDS if w in low), None)
+        if hit:
+            raise PublicMirrorRefusedError(
+                f"refused: {name!r} ({hit!r}) is a pack, and {repo} is the PUBLIC "
+                "model mirror. Ship packs through their product channel instead."
+            )
+
+
 def backend() -> str:
     mode = (os.getenv("AWRTIFACT_GH_BACKEND") or "auto").strip().lower()
     if mode == "cli":
@@ -118,6 +143,7 @@ def release_exists(repo: str, release: str) -> bool:
 
 
 def create_release(repo: str, release: str, title: str, notes: str) -> None:
+    refuse_pack_on_public_mirror(repo, release, title)
     if _api():
         _wrap(ghapi.create_release, repo, release, title, notes)
         return
@@ -140,6 +166,7 @@ def create_release(repo: str, release: str, title: str, notes: str) -> None:
 
 def upload(repo: str, release: str, path: str) -> None:
     """Upload one asset with --clobber (idempotent re-upload)."""
+    refuse_pack_on_public_mirror(repo, release, path)
     if _api():
         _wrap(ghapi.upload, repo, release, path)
         return
